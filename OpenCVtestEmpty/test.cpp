@@ -6,7 +6,7 @@ using namespace cv;
 
 int imgSizeX = 640;
 int imgSizeY = 360;
-Mat imgOriginal;
+Mat image;
 Mat imgHLS;
 Mat imgThresholded;
 int frameCounter = 1;
@@ -70,7 +70,7 @@ void morphClose(Mat &thresh) {
 }
 
 void detectHLSthresholds() {
-	cvtColor(imgOriginal, imgHLS, COLOR_BGR2HLS); //Convert the captured frame from BGR to HLS
+	cvtColor(image, imgHLS, COLOR_BGR2HLS); //Convert the captured frame from BGR to HLS
 	inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
 	//inRange(imgHLS, Scalar(87, 230, 255), Scalar(94, 255, 255), imgThresholded); //Threshold for party_-2_l_l.mp4 green
 	//inRange(imgHLS, Scalar(71, 169, 255), Scalar(98, 255, 255), imgThresholded); //Threshold for auto-darker3.mp4 blue
@@ -79,7 +79,7 @@ void detectHLSthresholds() {
 	morphOpen(imgThresholded);
 	//find contours of filtered image using openCV findContours function
 	findContours(imgThresholded, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
-	drawContours(imgOriginal, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
+	drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
 
 	////Calculate the moments of the thresholded image
 	//Moments oMoments = moments(imgThresholded);
@@ -109,7 +109,7 @@ void detectHLSthresholds() {
 void trackCamshift() {
 	if (!paused)
 	{
-		cvtColor(imgOriginal, hsv, COLOR_BGR2HSV);
+		cvtColor(image, hsv, COLOR_BGR2HSV);
 		if (trackObject)
 		{
 			int _vmin = vmin, _vmax = vmax;
@@ -153,15 +153,15 @@ void trackCamshift() {
 					Rect(0, 0, cols, rows);
 			}
 			if (backprojMode)
-				cvtColor(backproj, imgOriginal, COLOR_GRAY2BGR);
-			ellipse(imgOriginal, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
+				cvtColor(backproj, image, COLOR_GRAY2BGR);
+			ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 		}
 	}
 	else if (trackObject < 0)
 		paused = false;
 	if (selectObject && selection.width > 0 && selection.height > 0)
 	{
-		Mat roi(imgOriginal, selection);
+		Mat roi(image, selection);
 		bitwise_not(roi, roi);
 	}
 	imshow("Histogram", histimg);
@@ -199,7 +199,7 @@ static void onMouse(int event, int x, int y, int, void*)
 		selection.y = MIN(y, origin.y);
 		selection.width = std::abs(x - origin.x);
 		selection.height = std::abs(y - origin.y);
-		selection &= Rect(0, 0, imgOriginal.cols, imgOriginal.rows);
+		selection &= Rect(0, 0, image.cols, image.rows);
 	}
 	switch (event)
 	{
@@ -231,7 +231,7 @@ int main()
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, imgSizeX);
 	cap.set(CV_CAP_PROP_FRAME_HEIGHT, imgSizeY);
 
-	createTrackbars();
+	//createTrackbars();
 
 	//camshift temp
 	namedWindow("Original", 1);
@@ -240,34 +240,35 @@ int main()
 	createTrackbar("Vmax", "Original", &vmax, 256, 0);
 	createTrackbar("Smin", "Original", &smin, 256, 0);
 
-	while (true)
+	for(;;)
 	{
-		bool frameRead = cap.read(imgOriginal); // read a new frame from video
-		if (!frameRead) //if fail, break loop
-		{
-			cout << "Cannot read a frame from video stream" << endl;
-			break;
+		if (!paused) {
+			bool frameRead = cap.read(frame); // read a new frame from video
+			if (!frameRead) //if fail, break loop
+			{
+				cout << "Cannot read a frame from video stream" << endl;
+				break;
+			}
+			frameCounter++;
+			if (frameCounter == cap.get(CV_CAP_PROP_FRAME_COUNT)) //if end of video file reached, start from first frame
+			{
+				frameCounter = 1;
+				cap.set(CV_CAP_PROP_POS_FRAMES, 0);
+				cout << "Video loop" << endl;
+			}
 		}
-		frameCounter++;
-		if (frameCounter == cap.get(CV_CAP_PROP_FRAME_COUNT)) //if end of video file reached, start from first frame
-		{
-			frameCounter = 1;
-			cap.set(CV_CAP_PROP_POS_FRAMES, 0);
-			cout << "Video loop" << endl;
-		}
-
-		resize(imgOriginal, imgOriginal, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
+		resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 
 		trackCamshift();
 
-		imshow("Original", imgOriginal); //show the original image
+		imshow("Original", image); //show the original image
 
-		if (waitKey(0) == 32) //frame by frame with 'space'
-		{
-			cout << "space key is pressed by user" << endl;
-		}
+		//if (waitKey(0) == 32) //frame by frame with 'space'
+		//{
+		//	cout << "space key is pressed by user" << endl;
+		//}
 		if (waitKey(1) == 27) //wait for 'esc' key (27) press => break loop
 		{
 			cout << "esc key is pressed by user" << endl;
