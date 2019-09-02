@@ -10,6 +10,7 @@ Mat image;
 Mat imgHLS;
 Mat imgThresholded;
 int frameCounter = 1;
+double t;
 //these two vectors needed for output of findContours
 vector< vector<Point> > contours;
 vector<Vec4i> hierarchy;
@@ -28,12 +29,12 @@ bool selectObject = false;
 Rect selection;
 Point origin;
 int trackObject = 0;
-int vmin = 10, vmax = 256, smin = 30;
+int vmin = 250, vmax = 256, smin = 0;
 Rect trackWindow;
 int hsize = 16;
 float hranges[] = { 0,180 };
 const float* phranges = hranges;
-Mat frame, hsv, hue, mask, hist, histimg = Mat::zeros(200, 320, CV_8UC3), backproj;
+Mat frame, hsv, hue, mask, hist, histimg = Mat::zeros(200, 320, CV_8UC3), backproj, backprojImage, cannyOut;
 bool paused = false;
 bool backprojMode = false;
 bool showHist = true;
@@ -106,6 +107,32 @@ void detectHLSthresholds() {
 	imshow("Thresholded Image", imgThresholded); //show the thresholded image
 }
 
+// User draws box around object to track. This triggers CAMShift to start tracking
+static void onMouse(int event, int x, int y, int, void*)
+{
+	if (selectObject)
+	{
+		selection.x = MIN(x, origin.x);
+		selection.y = MIN(y, origin.y);
+		selection.width = std::abs(x - origin.x);
+		selection.height = std::abs(y - origin.y);
+		selection &= Rect(0, 0, image.cols, image.rows);
+	}
+	switch (event)
+	{
+	case EVENT_LBUTTONDOWN:
+		origin = Point(x, y);
+		selection = Rect(x, y, 0, 0);
+		selectObject = true;
+		break;
+	case EVENT_LBUTTONUP:
+		selectObject = false;
+		if (selection.width > 0 && selection.height > 0)
+			trackObject = -1;   // Set up CAMShift properties in main() loop
+		break;
+	}
+}
+
 void trackCamshift() {
 	if (!paused)
 	{
@@ -152,8 +179,16 @@ void trackCamshift() {
 					trackWindow.x + r, trackWindow.y + r) &
 					Rect(0, 0, cols, rows);
 			}
-			if (backprojMode)
-				cvtColor(backproj, image, COLOR_GRAY2BGR);
+			if (backprojMode) {
+				//backprojection image
+				image.copyTo(backprojImage);
+				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
+				imshow("Backprojection", backprojImage);
+
+				Canny(backprojImage(trackWindow), cannyOut, 150, 150 * 2);
+				findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+				drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
+			}
 			ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 		}
 	}
@@ -165,62 +200,15 @@ void trackCamshift() {
 		bitwise_not(roi, roi);
 	}
 	imshow("Histogram", histimg);
-	char c = (char)waitKey(10);
-	switch (c)
-	{
-	case 'b':
-		backprojMode = !backprojMode;
-		break;
-	case 'c':
-		trackObject = 0;
-		histimg = Scalar::all(0);
-		break;
-	case 'h':
-		showHist = !showHist;
-		if (!showHist)
-			destroyWindow("Histogram");
-		else
-			namedWindow("Histogram", 1);
-		break;
-	case 'p':
-		paused = !paused;
-		break;
-	default:
-		;
-	}
 }
 
-// User draws box around object to track. This triggers CAMShift to start tracking
-static void onMouse(int event, int x, int y, int, void*)
-{
-	if (selectObject)
-	{
-		selection.x = MIN(x, origin.x);
-		selection.y = MIN(y, origin.y);
-		selection.width = std::abs(x - origin.x);
-		selection.height = std::abs(y - origin.y);
-		selection &= Rect(0, 0, image.cols, image.rows);
-	}
-	switch (event)
-	{
-	case EVENT_LBUTTONDOWN:
-		origin = Point(x, y);
-		selection = Rect(x, y, 0, 0);
-		selectObject = true;
-		break;
-	case EVENT_LBUTTONUP:
-		selectObject = false;
-		if (selection.width > 0 && selection.height > 0)
-			trackObject = -1;   // Set up CAMShift properties in main() loop
-		break;
-	}
-}
 
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
-	VideoCapture cap("party_-2_l_l.mp4"); //video file
+	//VideoCapture cap("party_-2_l_l.mp4"); //video file
 	//VideoCapture cap("auto-darker3.mp4");
+	VideoCapture cap("night-normal.mp4");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
@@ -236,6 +224,7 @@ int main()
 	//camshift temp
 	namedWindow("Original", 1);
 	setMouseCallback("Original", onMouse, 0);
+	namedWindow("Backprojection", 1);
 	createTrackbar("Vmin", "Original", &vmin, 256, 0);
 	createTrackbar("Vmax", "Original", &vmax, 256, 0);
 	createTrackbar("Smin", "Original", &smin, 256, 0);
@@ -243,6 +232,7 @@ int main()
 	for(;;)
 	{
 		if (!paused) {
+			t = (double)getTickCount(); //measure time
 			bool frameRead = cap.read(frame); // read a new frame from video
 			if (!frameRead) //if fail, break loop
 			{
@@ -260,8 +250,8 @@ int main()
 		resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
 
 		//detectHLSthresholds(); //show regions of specified HLS values
-
 		trackCamshift();
+
 
 		imshow("Original", image); //show the original image
 
@@ -269,10 +259,32 @@ int main()
 		//{
 		//	cout << "space key is pressed by user" << endl;
 		//}
-		if (waitKey(1) == 27) //wait for 'esc' key (27) press => break loop
+		char c = (char)waitKey(10);
+		switch (c)
 		{
-			cout << "esc key is pressed by user" << endl;
+		case 'b':
+			backprojMode = !backprojMode;
 			break;
+		case 'c':
+			trackObject = 0;
+			histimg = Scalar::all(0);
+			break;
+		case 'h':
+			showHist = !showHist;
+			if (!showHist)
+				destroyWindow("Histogram");
+			else
+				namedWindow("Histogram", 1);
+			break;
+		case 'p':
+			paused = !paused;
+			break;
+		default:
+			;
+		}
+		if (!paused) {
+			t = ((double)getTickCount() - t) / getTickFrequency();
+			cout << "Times passed in seconds: " << t << endl;
 		}
 	}
 
