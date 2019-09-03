@@ -187,6 +187,8 @@ void trackCamshift() {
 
 				Canny(backprojImage(trackWindow), cannyOut, 150, 150 * 2);
 				findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+				//RotatedRect rr = fitEllipse(contours);
+				//ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 				drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
 			}
 			ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
