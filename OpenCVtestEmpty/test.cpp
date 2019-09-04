@@ -133,6 +133,35 @@ static void onMouse(int event, int x, int y, int, void*)
 	}
 }
 
+void vector_Point_to_Mat(std::vector<Point>& v_point, Mat& mat)
+{
+	mat = Mat(v_point, true);
+}
+
+void vector_Mat_to_Mat(std::vector<cv::Mat>& v_mat, cv::Mat& mat)
+{
+	int count = (int)v_mat.size();
+	mat.create(count, 1, CV_32SC2);
+	for (int i = 0; i < count; i++)
+	{
+		long long addr = (long long) new Mat(v_mat[i]);
+		mat.at< Vec<int, 2> >(i, 0) = Vec<int, 2>(addr >> 32, addr & 0xffffffff);
+	}
+}
+
+void vector_vector_Point_to_Mat(std::vector< std::vector< Point > >& vv_pt, Mat& mat)
+{
+	std::vector<Mat> vm;
+	vm.reserve(vv_pt.size());
+	for (size_t i = 0; i < vv_pt.size(); i++)
+	{
+		Mat m;
+		vector_Point_to_Mat(vv_pt[i], m);
+		vm.push_back(m);
+	}
+	vector_Mat_to_Mat(vm, mat);
+}
+
 void trackCamshift() {
 	if (!paused)
 	{
@@ -183,15 +212,21 @@ void trackCamshift() {
 				//backprojection image
 				image.copyTo(backprojImage);
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
-				imshow("Backprojection", backprojImage);
 
-				Canny(backprojImage(trackWindow), cannyOut, 150, 150 * 2);
-				findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
-				//RotatedRect rr = fitEllipse(contours);
-				//ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
-				drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
+				Canny(backprojImage(trackBox.boundingRect()), cannyOut, 200, 200 * 2);
+				findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, trackBox.boundingRect().tl());
+				vector<Point> contourPoints;
+				for(vector<Point> v : contours) {
+					for (Point p : v) {
+						contourPoints.push_back(p);
+					}
+				}
+				RotatedRect rr = fitEllipse(contourPoints);
+				ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
+				drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
+				imshow("Backprojection", backprojImage);
 			}
-			ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
+			//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 		}
 	}
 	else if (trackObject < 0)
