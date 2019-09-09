@@ -133,33 +133,29 @@ static void onMouse(int event, int x, int y, int, void*)
 	}
 }
 
-void vector_Point_to_Mat(std::vector<Point>& v_point, Mat& mat)
+void drawRotatedRect(RotatedRect rr, Mat img)
 {
-	mat = Mat(v_point, true);
+	Point2f vertices[4];
+	rr.points(vertices);
+	for (int i = 0; i < 4; i++)
+		line(img, vertices[i], vertices[(i + 1) % 4], Scalar(0, 255, 0), 2);
 }
 
-void vector_Mat_to_Mat(std::vector<cv::Mat>& v_mat, cv::Mat& mat)
+void fitBand(Rect roi)
 {
-	int count = (int)v_mat.size();
-	mat.create(count, 1, CV_32SC2);
-	for (int i = 0; i < count; i++)
-	{
-		long long addr = (long long) new Mat(v_mat[i]);
-		mat.at< Vec<int, 2> >(i, 0) = Vec<int, 2>(addr >> 32, addr & 0xffffffff);
+	Canny(backprojImage(roi), cannyOut, 200, 200 * 2);
+	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi.tl());
+	vector<Point> contourPoints;
+	for (vector<Point> v : contours) {
+		for (Point p : v) {
+			contourPoints.push_back(p);
+		}
 	}
-}
-
-void vector_vector_Point_to_Mat(std::vector< std::vector< Point > >& vv_pt, Mat& mat)
-{
-	std::vector<Mat> vm;
-	vm.reserve(vv_pt.size());
-	for (size_t i = 0; i < vv_pt.size(); i++)
-	{
-		Mat m;
-		vector_Point_to_Mat(vv_pt[i], m);
-		vm.push_back(m);
+	if (contourPoints.size() > 3) {
+		RotatedRect rr = fitEllipse(contourPoints);
+		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 	}
-	vector_Mat_to_Mat(vm, mat);
+	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
 }
 
 void trackCamshift() {
@@ -213,20 +209,12 @@ void trackCamshift() {
 				image.copyTo(backprojImage);
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
 
-				Canny(backprojImage(trackBox.boundingRect()), cannyOut, 200, 200 * 2);
-				findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, trackBox.boundingRect().tl());
-				vector<Point> contourPoints;
-				for(vector<Point> v : contours) {
-					for (Point p : v) {
-						contourPoints.push_back(p);
-					}
+				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
+					fitBand(trackBox.boundingRect());
+					//ellipse(backprojImage, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
-				RotatedRect rr = fitEllipse(contourPoints);
-				ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
-				drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
 				imshow("Backprojection", backprojImage);
 			}
-			//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 		}
 	}
 	else if (trackObject < 0)
@@ -243,9 +231,9 @@ void trackCamshift() {
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
-	//VideoCapture cap("party_-2_l_l.mp4"); //video file
+	VideoCapture cap("party_-2_l_l.mp4"); //video file
 	//VideoCapture cap("auto-darker3.mp4");
-	VideoCapture cap("night-normal.mp4");
+	//VideoCapture cap("night-normal.mp4");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
