@@ -138,7 +138,17 @@ void drawRotatedRect(RotatedRect rr, Mat img)
 	Point2f vertices[4];
 	rr.points(vertices);
 	for (int i = 0; i < 4; i++)
-		line(img, vertices[i], vertices[(i + 1) % 4], Scalar(0, 255, 0), 2);
+		line(img, vertices[i], vertices[(i + 1) % 4], Scalar(0, 255, 0));
+}
+
+Rect cutRectImgBounds(Rect r, int imgWidth, int imgHeight)
+{
+	if (r.x + r.width > imgWidth) {
+		return Rect(r.tl(), Size(imgWidth - r.x, r.height));
+	}
+	else {
+		return r;
+	}
 }
 
 void fitBand(Rect roi)
@@ -210,7 +220,9 @@ void trackCamshift() {
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
 
 				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
-					fitBand(trackBox.boundingRect());
+					fitBand(cutRectImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
+					drawRotatedRect(trackBox, backprojImage);
+					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(backprojImage, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
 				imshow("Backprojection", backprojImage);
