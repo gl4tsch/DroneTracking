@@ -28,13 +28,14 @@ int highL = 255;
 bool selectObject = false;
 Rect selection;
 Point origin;
-int trackObject = 0;
+int trackObject1 = 0;
+int trackObject2 = 0;
 int vmin = 250, vmax = 256, smin = 0;
-Rect trackWindow;
+Rect trackWindow, trackWindow2;
 int hsize = 16;
 float hranges[] = { 0,180 };
 const float* phranges = hranges;
-Mat frame, hsv, hue, mask, hist, histimg = Mat::zeros(200, 320, CV_8UC3), backproj, backprojImage, cannyOut;
+Mat frame, hsv, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut;
 bool paused = false;
 bool backprojMode = false;
 bool showHist = true;
@@ -128,7 +129,14 @@ static void onMouse(int event, int x, int y, int, void*)
 	case EVENT_LBUTTONUP:
 		selectObject = false;
 		if (selection.width > 0 && selection.height > 0)
-			trackObject = -1;   // Set up CAMShift properties in main() loop
+		{
+			if (waitKey(0) == '1') {
+				trackObject1 = -1;   // Set up CAMShift properties in main() loop
+			}
+			else {
+				trackObject2 = -1;
+			}
+		}
 		break;
 	}
 }
@@ -141,14 +149,23 @@ void drawRotatedRect(RotatedRect rr, Mat img)
 		line(img, vertices[i], vertices[(i + 1) % 4], Scalar(0, 255, 0));
 }
 
-Rect cutRectImgBounds(Rect r, int imgWidth, int imgHeight)
+Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 {
+	Rect tempR = r;
 	if (r.x + r.width > imgWidth) {
-		return Rect(r.tl(), Size(imgWidth - r.x, r.height));
+		tempR = Rect(tempR.tl(), Size(imgWidth - tempR.x, tempR.height));
 	}
-	else {
-		return r;
+	if (r.y + r.height > imgHeight) {
+		tempR = Rect(tempR.tl(), Size(tempR.width, imgHeight - tempR.y));
 	}
+	if (r.x < 0) {
+		tempR.x = 0;
+	}
+	if (r.y < 0) {
+		tempR.y = 0;
+	}
+
+	return tempR;
 }
 
 void fitBand(Rect roi)
@@ -161,7 +178,7 @@ void fitBand(Rect roi)
 			contourPoints.push_back(p);
 		}
 	}
-	if (contourPoints.size() > 3) {
+	if (contourPoints.size() > 4) {
 		RotatedRect rr = fitEllipse(contourPoints);
 		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 	}
@@ -172,7 +189,7 @@ void trackCamshift() {
 	if (!paused)
 	{
 		cvtColor(image, hsv, COLOR_BGR2HSV);
-		if (trackObject)
+		if (trackObject1)
 		{
 			int _vmin = vmin, _vmax = vmax;
 			inRange(hsv, Scalar(0, smin, MIN(_vmin, _vmax)),
@@ -180,14 +197,14 @@ void trackCamshift() {
 			int ch[] = { 0, 0 };
 			hue.create(hsv.size(), hsv.depth());
 			mixChannels(&hsv, 1, &hue, 1, ch, 1);
-			if (trackObject < 0)
+			if (trackObject1 < 0)
 			{
 				// Object has been selected by user, set up CAMShift search properties once
 				Mat roi(hue, selection), maskroi(mask, selection);
 				calcHist(&roi, 1, 0, maskroi, hist, 1, &hsize, &phranges);
 				normalize(hist, hist, 0, 255, NORM_MINMAX);
 				trackWindow = selection;
-				trackObject = 1; // Don't set up again, unless user selects new ROI
+				trackObject1 = 1; // Don't set up again, unless user selects new ROI
 				histimg = Scalar::all(0);
 				int binW = histimg.cols / hsize;
 				Mat buf(1, hsize, CV_8UC3);
@@ -220,16 +237,72 @@ void trackCamshift() {
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
 
 				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
-					fitBand(cutRectImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
+					fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
 					drawRotatedRect(trackBox, backprojImage);
 					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
-					//ellipse(backprojImage, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
+					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
 				imshow("Backprojection", backprojImage);
 			}
 		}
+		if (trackObject2)
+		{
+			int _vmin = vmin, _vmax = vmax;
+			inRange(hsv, Scalar(0, smin, MIN(_vmin, _vmax)),
+				Scalar(180, 256, MAX(_vmin, _vmax)), mask2);
+			int ch[] = { 0, 0 };
+			hue2.create(hsv.size(), hsv.depth());
+			mixChannels(&hsv, 1, &hue2, 1, ch, 1);
+			if (trackObject2 < 0)
+			{
+				// Object has been selected by user, set up CAMShift search properties once
+				Mat roi(hue2, selection), maskroi(mask2, selection);
+				calcHist(&roi, 1, 0, maskroi, hist2, 1, &hsize, &phranges);
+				normalize(hist2, hist2, 0, 255, NORM_MINMAX);
+				trackWindow2 = selection;
+				trackObject2 = 1; // Don't set up again, unless user selects new ROI
+				histimg2 = Scalar::all(0);
+				int binW = histimg2.cols / hsize;
+				Mat buf(1, hsize, CV_8UC3);
+				for (int i = 0; i < hsize; i++)
+					buf.at<Vec3b>(i) = Vec3b(saturate_cast<uchar>(i*180. / hsize), 255, 255);
+				cvtColor(buf, buf, COLOR_HSV2BGR);
+				for (int i = 0; i < hsize; i++)
+				{
+					int val = saturate_cast<int>(hist2.at<float>(i)*histimg2.rows / 255);
+					rectangle(histimg2, Point(i*binW, histimg2.rows),
+						Point((i + 1)*binW, histimg2.rows - val),
+						Scalar(buf.at<Vec3b>(i)), -1, 8);
+				}
+			}
+			// Perform CAMShift
+			calcBackProject(&hue2, 1, 0, hist2, backproj2, &phranges);
+			backproj2 &= mask2;
+			RotatedRect trackBox2 = CamShift(backproj2, trackWindow2,
+				TermCriteria(TermCriteria::EPS | TermCriteria::COUNT, 10, 1));
+			if (trackWindow2.area() <= 1)
+			{
+				int cols = backproj2.cols, rows = backproj2.rows, r = (MIN(cols, rows) + 5) / 6;
+				trackWindow2 = Rect(trackWindow2.x - r, trackWindow2.y - r,
+					trackWindow2.x + r, trackWindow2.y + r) &
+					Rect(0, 0, cols, rows);
+			}
+			if (backprojMode) {
+				//backprojection image
+				image.copyTo(backprojImage2);
+				cvtColor(backproj2, backprojImage2, COLOR_GRAY2BGR);
+
+				if (trackBox2.size.height > 0 && trackBox2.size.width > 0) {
+					//fitBand(cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
+					drawRotatedRect(trackBox2, backprojImage2);
+					rectangle(backprojImage2, trackBox2.boundingRect(), Scalar(0, 0, 255));
+					//ellipse(image, trackBox2, Scalar(0, 255, 0), 3, LINE_AA);
+				}
+				imshow("Backprojection2", backprojImage2);
+			}
+		}
 	}
-	else if (trackObject < 0)
+	else if (trackObject1 < 0 || trackObject2 < 0)
 		paused = false;
 	if (selectObject && selection.width > 0 && selection.height > 0)
 	{
@@ -237,6 +310,7 @@ void trackCamshift() {
 		bitwise_not(roi, roi);
 	}
 	imshow("Histogram", histimg);
+	imshow("Histogram2", histimg2);
 }
 
 
@@ -262,6 +336,7 @@ int main()
 	namedWindow("Original", 1);
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
+	namedWindow("Backprojection2", 1);
 	createTrackbar("Vmin", "Original", &vmin, 256, 0);
 	createTrackbar("Vmax", "Original", &vmax, 256, 0);
 	createTrackbar("Smin", "Original", &smin, 256, 0);
@@ -303,7 +378,7 @@ int main()
 			backprojMode = !backprojMode;
 			break;
 		case 'c':
-			trackObject = 0;
+			trackObject1 = 0;
 			histimg = Scalar::all(0);
 			break;
 		case 'h':
