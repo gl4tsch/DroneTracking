@@ -327,12 +327,48 @@ void trackCamshift() {
 	imshow("Histogram2", histimg2);
 }
 
+void LEDdetect()
+{
+	//compute mask based on camshift track rotated rect
+	Mat blobMask = Mat::zeros(imgSizeY, imgSizeX, CV_8UC3);
+	Point2f vertices2f[4];
+	Point vertices[4];
+	trackBox.points(vertices2f);
+	for (int i = 0; i < 4; i++){
+		vertices[i] = vertices2f[i];
+	}
+	fillConvexPoly(blobMask, vertices, 4, Scalar(255,255,255));
+	Mat maskedImg;
+	image.copyTo(maskedImg, blobMask);
+	imshow("maskedImg", maskedImg);
+
+	////threshold masked image
+	//cvtColor(maskedImg, imgHLS, COLOR_BGR2HLS); //Convert the captured frame from BGR to HLS
+	//inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
+	//imshow("Thresholded image", imgThresholded);
+
+	////canny edge
+	//Canny(imgThresholded, cannyOut, 200, 200 * 2);
+	//findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+
+	////fit ellipse with detected edge points
+	//vector<Point> contourPoints;
+	//for (vector<Point> v : contours) {
+	//	for (Point p : v) {
+	//		contourPoints.push_back(p);
+	//	}
+	//}
+	//if (contourPoints.size() > 4) {
+	//	RotatedRect rr = fitEllipse(contourPoints);
+	//	ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
+	//}
+}
 
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
-	VideoCapture cap("party_-2_l_l.mp4"); //video file
-	//VideoCapture cap("auto-darker3.mp4");
+	//VideoCapture cap("party_-2_l_l.mp4"); //video file
+	VideoCapture cap("auto-darker3.mp4");
 	//VideoCapture cap("night-normal.mp4");
 
 	if (!cap.isOpened())  // if not success, exit program
@@ -344,7 +380,7 @@ int main()
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, imgSizeX);
 	cap.set(CV_CAP_PROP_FRAME_HEIGHT, imgSizeY);
 
-	//createTrackbars();
+	createTrackbars();
 
 	//camshift temp
 	namedWindow("Original", 1);
@@ -377,7 +413,8 @@ int main()
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		trackCamshift();
-
+		LEDdetect();
+		
 
 		imshow("Original", image); //show the original image
 
