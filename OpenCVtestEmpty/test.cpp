@@ -12,8 +12,8 @@ Mat imgThresholded;
 int frameCounter = 1;
 double t;
 //these two vectors needed for output of findContours
-vector< vector<Point> > contours;
-vector<Vec4i> hierarchy;
+vector< vector<Point> > contours, contours2;
+vector<Vec4i> hierarchy, hierarchy2;
 
 int lowH = 0;
 int highH = 180;
@@ -35,10 +35,11 @@ Rect trackWindow, trackWindow2;
 int hsize = 16;
 float hranges[] = { 0,180 };
 const float* phranges = hranges;
-Mat frame, hsv, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut;
+Mat frame, hsv, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut, cannyOut2;
 bool paused = false;
-bool backprojMode = false;
+bool backprojMode = true;
 bool showHist = true;
+RotatedRect trackBox, trackBox2;
 
 
 
@@ -168,12 +169,20 @@ Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 	return tempR;
 }
 
-void fitBand(Rect roi)
+void fitBand(Rect roi, Rect roi2)
 {
 	Canny(backprojImage(roi), cannyOut, 200, 200 * 2);
 	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi.tl());
+	/*Canny(backprojImage2(roi2), cannyOut2, 200, 200 * 2);
+	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi2.tl());*/
+
 	vector<Point> contourPoints;
 	for (vector<Point> v : contours) {
+		for (Point p : v) {
+			contourPoints.push_back(p);
+		}
+	}
+	for (vector<Point> v : contours2) {
 		for (Point p : v) {
 			contourPoints.push_back(p);
 		}
@@ -183,7 +192,9 @@ void fitBand(Rect roi)
 		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 	}
 	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
+	//drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
 }
+
 
 void trackCamshift() {
 	if (!paused)
@@ -222,7 +233,7 @@ void trackCamshift() {
 			// Perform CAMShift
 			calcBackProject(&hue, 1, 0, hist, backproj, &phranges);
 			backproj &= mask;
-			RotatedRect trackBox = CamShift(backproj, trackWindow,
+			trackBox = CamShift(backproj, trackWindow,
 				TermCriteria(TermCriteria::EPS | TermCriteria::COUNT, 10, 1));
 			if (trackWindow.area() <= 1)
 			{
@@ -237,7 +248,7 @@ void trackCamshift() {
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
 
 				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
-					fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
+					//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
 					drawRotatedRect(trackBox, backprojImage);
 					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
@@ -278,7 +289,7 @@ void trackCamshift() {
 			// Perform CAMShift
 			calcBackProject(&hue2, 1, 0, hist2, backproj2, &phranges);
 			backproj2 &= mask2;
-			RotatedRect trackBox2 = CamShift(backproj2, trackWindow2,
+			trackBox2 = CamShift(backproj2, trackWindow2,
 				TermCriteria(TermCriteria::EPS | TermCriteria::COUNT, 10, 1));
 			if (trackWindow2.area() <= 1)
 			{
@@ -300,6 +311,9 @@ void trackCamshift() {
 				}
 				imshow("Backprojection2", backprojImage2);
 			}
+		}
+		if (trackObject1 && trackObject2) {
+			//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
 		}
 	}
 	else if (trackObject1 < 0 || trackObject2 < 0)
