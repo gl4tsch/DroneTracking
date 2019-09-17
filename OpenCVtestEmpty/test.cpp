@@ -44,7 +44,7 @@ RotatedRect trackBox, trackBox2;
 int thresh = 0;
 
 //blob detect
-SimpleBlobDetector detector;
+Ptr<SimpleBlobDetector> detector;
 std::vector<KeyPoint> keypoints;
 
 
@@ -203,13 +203,13 @@ void fitBandContours(Rect roi, Rect roi2)
 
 void fitBandBlob()
 {
-	detector.detect(backprojImage, keypoints);
+	if (!backproj.empty()) {
+		detector->detect(backproj, keypoints);
+		// Draw detected blobs as red circles.
+		// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
+		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255));
 
-	// Draw detected blobs as red circles.
-	// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
-	Mat im_with_keypoints;
-	if (!keypoints.empty()) {
-		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+		imshow("Backrprojection", backprojImage);
 	}
 }
 
@@ -305,7 +305,7 @@ void trackCamshift() {
 					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
-				imshow("Backprojection", backprojImage);
+				//imshow("Backprojection", backprojImage);
 			}
 		}
 		if (trackObject2)
@@ -445,10 +445,44 @@ int main()
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
 	namedWindow("Backprojection2", 1);
-	namedWindow("binary", 1);
 	createTrackbar("Lmin", "Original", &lmin, 255, 0);
 	createTrackbar("Lmax", "Original", &lmax, 255, 0);
-	createTrackbar("thresh", "binary", &thresh, 255, 0);
+
+	//blob
+	// Setup SimpleBlobDetector parameters.
+	SimpleBlobDetector::Params params;
+	
+	// Change thresholds
+	params.minThreshold = 200;
+	params.maxThreshold = 255;
+
+	// Filter by Area.
+	params.filterByArea = false;
+	params.minArea = 5;
+
+	// Filter by Circularity
+	params.filterByCircularity = false;
+	params.minCircularity = 0.1;
+
+	// Filter by Convexity
+	params.filterByConvexity = false;
+	params.minConvexity = 0.87;
+
+	// Filter by Inertia
+	params.filterByInertia = false;
+	params.minInertiaRatio = 0.01;
+
+	// Blob merge distance
+	params.minDistBetweenBlobs = 1;
+
+	// Blob intensity
+	params.filterByColor = false;
+	params.blobColor = 255;
+
+	// Set up detector with params
+	detector = SimpleBlobDetector::create(params);
+	// SimpleBlobDetector::create creates a smart pointer. 
+	// So you need to use arrow ( ->) instead of dot ( . )
 
 	for(;;)
 	{
@@ -472,9 +506,8 @@ int main()
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		trackCamshift();
-		fitBandBlob();
 		//LEDdetect();
-		
+		fitBandBlob();
 
 		imshow("Original", image); //show the original image
 
