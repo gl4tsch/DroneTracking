@@ -30,16 +30,22 @@ Rect selection;
 Point origin;
 int trackObject1 = 0;
 int trackObject2 = 0;
-int vmin = 250, vmax = 256, smin = 0;
+int lmin = 220;
+int lmax = 255;
 Rect trackWindow, trackWindow2;
 int hsize = 16;
 float hranges[] = { 0,180 };
 const float* phranges = hranges;
-Mat frame, hsv, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut, cannyOut2;
+Mat frame, hls, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut, cannyOut2;
 bool paused = false;
 bool backprojMode = true;
 bool showHist = true;
 RotatedRect trackBox, trackBox2;
+int thresh = 0;
+
+//blob detect
+SimpleBlobDetector detector;
+std::vector<KeyPoint> keypoints;
 
 
 
@@ -169,7 +175,7 @@ Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 	return tempR;
 }
 
-void fitBand(Rect roi, Rect roi2)
+void fitBandContours(Rect roi, Rect roi2)
 {
 	Canny(backprojImage(roi), cannyOut, 200, 200 * 2);
 	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi.tl());
@@ -195,19 +201,65 @@ void fitBand(Rect roi, Rect roi2)
 	//drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
 }
 
+void fitBandBlob()
+{
+	detector.detect(backprojImage, keypoints);
+
+	// Draw detected blobs as red circles.
+	// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
+	Mat im_with_keypoints;
+	if (!keypoints.empty()) {
+		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	}
+}
+
+//RotatedRect trackCamshift(int trackObject, Mat& hsv, int vmin, int vmax, int smin, Rect selection, Mat& mask, Mat& hue) {
+//	if (!paused) {
+//		cvtColor(image, hsv, COLOR_BGR2HSV);
+//		if (trackObject)
+//		{
+//			inRange(hsv, Scalar(0, smin, MIN(vmin, vmax)),
+//				Scalar(180, 256, MAX(vmin, vmax)), mask);
+//			int ch[] = { 0, 0 };
+//			hue.create(hsv.size(), hsv.depth());
+//			mixChannels(&hsv, 1, &hue, 1, ch, 1);
+//			if (trackObject < 0)
+//			{
+//				// Object has been selected by user, set up CAMShift search properties once
+//				Mat roi(hue, selection), maskroi(mask, selection);
+//				calcHist(&roi, 1, 0, maskroi, hist, 1, &hsize, &phranges);
+//				normalize(hist, hist, 0, 255, NORM_MINMAX);
+//				trackWindow = selection;
+//				trackObject1 = 1; // Don't set up again, unless user selects new ROI
+//				histimg = Scalar::all(0);
+//				int binW = histimg.cols / hsize;
+//				Mat buf(1, hsize, CV_8UC3);
+//				for (int i = 0; i < hsize; i++)
+//					buf.at<Vec3b>(i) = Vec3b(saturate_cast<uchar>(i*180. / hsize), 255, 255);
+//				cvtColor(buf, buf, COLOR_HSV2BGR);
+//				for (int i = 0; i < hsize; i++)
+//				{
+//					int val = saturate_cast<int>(hist.at<float>(i)*histimg.rows / 255);
+//					rectangle(histimg, Point(i*binW, histimg.rows),
+//						Point((i + 1)*binW, histimg.rows - val),
+//						Scalar(buf.at<Vec3b>(i)), -1, 8);
+//				}
+//			}
+//		}
+//	}
+//}
 
 void trackCamshift() {
 	if (!paused)
 	{
-		cvtColor(image, hsv, COLOR_BGR2HSV);
+		cvtColor(image, hls, COLOR_BGR2HLS);
 		if (trackObject1)
 		{
-			int _vmin = vmin, _vmax = vmax;
-			inRange(hsv, Scalar(0, smin, MIN(_vmin, _vmax)),
-				Scalar(180, 256, MAX(_vmin, _vmax)), mask);
+			inRange(hls, Scalar(0, lmin, 255),
+				Scalar(180, lmax, 255), mask);
 			int ch[] = { 0, 0 };
-			hue.create(hsv.size(), hsv.depth());
-			mixChannels(&hsv, 1, &hue, 1, ch, 1);
+			hue.create(hls.size(), hls.depth());
+			mixChannels(&hls, 1, &hue, 1, ch, 1);
 			if (trackObject1 < 0)
 			{
 				// Object has been selected by user, set up CAMShift search properties once
@@ -258,12 +310,11 @@ void trackCamshift() {
 		}
 		if (trackObject2)
 		{
-			int _vmin = vmin, _vmax = vmax;
-			inRange(hsv, Scalar(0, smin, MIN(_vmin, _vmax)),
-				Scalar(180, 256, MAX(_vmin, _vmax)), mask2);
+			inRange(hls, Scalar(0, lmin, 255),
+				Scalar(180, 255, 255), mask2);
 			int ch[] = { 0, 0 };
-			hue2.create(hsv.size(), hsv.depth());
-			mixChannels(&hsv, 1, &hue2, 1, ch, 1);
+			hue2.create(hls.size(), hls.depth());
+			mixChannels(&hls, 1, &hue2, 1, ch, 1);
 			if (trackObject2 < 0)
 			{
 				// Object has been selected by user, set up CAMShift search properties once
@@ -342,6 +393,13 @@ void LEDdetect()
 	image.copyTo(maskedImg, blobMask);
 	imshow("maskedImg", maskedImg);
 
+	Mat maskedGrey, maskedBinary;
+	cvtColor(maskedImg, maskedGrey, cv::COLOR_BGR2GRAY);
+	threshold(maskedGrey, maskedBinary, thresh, 255, THRESH_BINARY);
+	erode(maskedBinary, maskedBinary, getStructuringElement(MORPH_RECT, Size(3, 3)));
+	dilate(maskedBinary, maskedBinary, getStructuringElement(MORPH_RECT, Size(3, 3)));
+	imshow("binary", maskedBinary);
+
 	////threshold masked image
 	//cvtColor(maskedImg, imgHLS, COLOR_BGR2HLS); //Convert the captured frame from BGR to HLS
 	//inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
@@ -387,9 +445,10 @@ int main()
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
 	namedWindow("Backprojection2", 1);
-	createTrackbar("Vmin", "Original", &vmin, 256, 0);
-	createTrackbar("Vmax", "Original", &vmax, 256, 0);
-	createTrackbar("Smin", "Original", &smin, 256, 0);
+	namedWindow("binary", 1);
+	createTrackbar("Lmin", "Original", &lmin, 255, 0);
+	createTrackbar("Lmax", "Original", &lmax, 255, 0);
+	createTrackbar("thresh", "binary", &thresh, 255, 0);
 
 	for(;;)
 	{
@@ -413,7 +472,8 @@ int main()
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		trackCamshift();
-		LEDdetect();
+		fitBandBlob();
+		//LEDdetect();
 		
 
 		imshow("Original", image); //show the original image
