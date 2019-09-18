@@ -30,8 +30,10 @@ Rect selection;
 Point origin;
 int trackObject1 = 0;
 int trackObject2 = 0;
-int lmin = 220;
-int lmax = 255;
+int lmin1 = 220;
+int lmax1 = 255;
+int lmin2 = 220;
+int lmax2 = 255;
 Rect trackWindow, trackWindow2;
 int hsize = 16;
 float hranges[] = { 0,180 };
@@ -177,10 +179,10 @@ Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 
 void fitBandContours(Rect roi, Rect roi2)
 {
-	Canny(backprojImage(roi), cannyOut, 200, 200 * 2);
-	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi.tl());
-	/*Canny(backprojImage2(roi2), cannyOut2, 200, 200 * 2);
-	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE, roi2.tl());*/
+	Canny(backproj, cannyOut, 200, 200 * 2);
+	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi1);
+	Canny(backproj2, cannyOut2, 200, 200 * 2);
+	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi2);
 
 	vector<Point> contourPoints;
 	for (vector<Point> v : contours) {
@@ -198,18 +200,27 @@ void fitBandContours(Rect roi, Rect roi2)
 		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 	}
 	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
-	//drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
+	drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
+	imshow("Backprojection", backprojImage);
+	imshow("Backprojection2", backprojImage2);
 }
 
 void fitBandBlob()
 {
 	if (!backproj.empty()) {
-		detector->detect(backproj, keypoints);
+		Mat bpCombi = backproj + backproj2;
+		imshow("test", bpCombi);
+		detector->detect(bpCombi, keypoints);
 		// Draw detected blobs as red circles.
 		// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
-		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255));
-
-		imshow("Backrprojection", backprojImage);
+		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+		imshow("Backprojection", backprojImage);
+		vector<Point2f> points;
+		KeyPoint::convert(keypoints, points);
+		if (points.size() > 4) {
+			RotatedRect rr = fitEllipse(points);
+			ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
+		}
 	}
 }
 
@@ -255,8 +266,8 @@ void trackCamshift() {
 		cvtColor(image, hls, COLOR_BGR2HLS);
 		if (trackObject1)
 		{
-			inRange(hls, Scalar(0, lmin, 255),
-				Scalar(180, lmax, 255), mask);
+			inRange(hls, Scalar(0, lmin1, 255),
+				Scalar(180, lmax1, 255), mask);
 			int ch[] = { 0, 0 };
 			hue.create(hls.size(), hls.depth());
 			mixChannels(&hls, 1, &hue, 1, ch, 1);
@@ -305,13 +316,13 @@ void trackCamshift() {
 					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
-				//imshow("Backprojection", backprojImage);
+				imshow("Backprojection", backprojImage);
 			}
 		}
 		if (trackObject2)
 		{
-			inRange(hls, Scalar(0, lmin, 255),
-				Scalar(180, 255, 255), mask2);
+			inRange(hls, Scalar(0, lmin2, 255),
+				Scalar(180, lmax2, 255), mask2);
 			int ch[] = { 0, 0 };
 			hue2.create(hls.size(), hls.depth());
 			mixChannels(&hls, 1, &hue2, 1, ch, 1);
@@ -445,8 +456,11 @@ int main()
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
 	namedWindow("Backprojection2", 1);
-	createTrackbar("Lmin", "Original", &lmin, 255, 0);
-	createTrackbar("Lmax", "Original", &lmax, 255, 0);
+	createTrackbar("Lmin1", "Backprojection", &lmin1, 255, 0);
+	createTrackbar("Lmax1", "Backprojection", &lmax1, 255, 0);
+	createTrackbar("Lmin2", "Backprojection2", &lmin2, 255, 0);
+	createTrackbar("Lmax2", "Backprojection2", &lmax2, 255, 0);
+
 
 	//blob
 	// Setup SimpleBlobDetector parameters.
@@ -473,7 +487,7 @@ int main()
 	params.minInertiaRatio = 0.01;
 
 	// Blob merge distance
-	params.minDistBetweenBlobs = 1;
+	params.minDistBetweenBlobs = 3;
 
 	// Blob intensity
 	params.filterByColor = false;
@@ -507,7 +521,10 @@ int main()
 		//detectHLSthresholds(); //show regions of specified HLS values
 		trackCamshift();
 		//LEDdetect();
-		fitBandBlob();
+		//fitBandBlob();
+		if (!backproj.empty() && !backproj2.empty()) {
+			fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
+		}
 
 		imshow("Original", image); //show the original image
 
