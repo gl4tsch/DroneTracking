@@ -180,9 +180,9 @@ Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 void fitBandContours(Rect roi, Rect roi2)
 {
 	Canny(backproj, cannyOut, 200, 200 * 2);
-	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi1);
+	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi.tl());
 	Canny(backproj2, cannyOut2, 200, 200 * 2);
-	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi2);
+	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi2.tl());
 
 	vector<Point> contourPoints;
 	for (vector<Point> v : contours) {
@@ -433,6 +433,18 @@ void LEDdetect()
 	//}
 }
 
+void PnPapprox() {
+	//bool solvePnP(InputArray objectPoints, InputArray imagePoints, InputArray cameraMatrix, InputArray distCoeffs, OutputArray rvec, OutputArray tvec, bool useExtrinsicGuess = false, int flags = SOLVEPNP_ITERATIVE);
+	
+	//approx camera internals
+	double focalLength = imgSizeX;
+	Point2d center = Point2d(imgSizeX / 2, imgSizeY / 2);
+	Mat cameraMatrix = (Mat_<double>(3, 3) << focalLength, 0, center.x, 0, focalLength, center.y, 0, 0, 1);
+	Mat distCoeffs = Mat::zeros(4, 1, DataType<double>::type); // Assuming no lens distortion
+	cout << "Camera Matrix " << endl << cameraMatrix << endl;
+
+}
+
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
@@ -449,7 +461,7 @@ int main()
 	cap.set(CV_CAP_PROP_FRAME_WIDTH, imgSizeX);
 	cap.set(CV_CAP_PROP_FRAME_HEIGHT, imgSizeY);
 
-	createTrackbars();
+	//createTrackbars();
 
 	//camshift temp
 	namedWindow("Original", 1);
