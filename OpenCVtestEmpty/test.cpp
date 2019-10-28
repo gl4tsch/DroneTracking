@@ -52,6 +52,8 @@ std::vector<KeyPoint> keypoints;
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
 
+Mat imgGrey, imgBinary;
+
 
 
 void createTrackbars() {
@@ -450,6 +452,16 @@ void LEDdetect()
 	//}
 }
 
+void greyLEDdetect(){
+	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
+	threshold(imgGrey, imgBinary, 240, 255, THRESH_BINARY);
+	detector->detect(imgGrey, keypoints);
+	drawKeypoints(imgGrey, keypoints, imgGrey, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	imshow("grey", imgGrey);
+	imshow("binary", imgBinary);
+
+}
+
 void PnPapprox() {
 	//bool solvePnP(InputArray objectPoints, InputArray imagePoints, InputArray cameraMatrix, InputArray distCoeffs, OutputArray rvec, OutputArray tvec, bool useExtrinsicGuess = false, int flags = SOLVEPNP_ITERATIVE);
 	
@@ -569,12 +581,12 @@ int main()
 	SimpleBlobDetector::Params params;
 	
 	// Change thresholds
-	params.minThreshold = 200;
+	params.minThreshold = 240;
 	params.maxThreshold = 255;
 
 	// Filter by Area.
-	params.filterByArea = false;
-	params.minArea = 5;
+	params.filterByArea = true;
+	params.minArea = 3;
 
 	// Filter by Circularity
 	params.filterByCircularity = false;
@@ -585,7 +597,7 @@ int main()
 	params.minConvexity = 0.87;
 
 	// Filter by Inertia
-	params.filterByInertia = false;
+	params.filterByInertia = true;
 	params.minInertiaRatio = 0.01;
 
 	// Blob merge distance
@@ -621,12 +633,14 @@ int main()
 		resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
 
 		//detectHLSthresholds(); //show regions of specified HLS values
-		trackCamshift();
+		//trackCamshift();
 		//LEDdetect();
-		fitBandBlob();
+		//fitBandBlob();
 		/*if (!backproj.empty() && !backproj2.empty()) {
 			fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
 		}*/
+
+		greyLEDdetect();
 
 		imshow("Original", image); //show the original image
 
