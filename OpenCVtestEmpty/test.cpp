@@ -49,6 +49,9 @@ int thresh = 0;
 Ptr<SimpleBlobDetector> detector;
 std::vector<KeyPoint> keypoints;
 
+const int bufferSize = 5;
+Point2d pointBuffer[bufferSize];
+
 
 
 void createTrackbars() {
@@ -177,6 +180,14 @@ Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
 	return tempR;
 }
 
+Point2d calculateMedian() {
+	Point2d point = Point2d(0, 0);
+	for (int i = 0; i < bufferSize; i++) {
+		point += pointBuffer[i];
+	}
+	return point / bufferSize;
+}
+
 void fitBandContours(Rect roi, Rect roi2)
 {
 	Canny(backproj, cannyOut, 200, 200 * 2);
@@ -198,6 +209,12 @@ void fitBandContours(Rect roi, Rect roi2)
 	if (contourPoints.size() > 4) {
 		RotatedRect rr = fitEllipse(contourPoints);
 		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
+		pointBuffer[frameCounter % bufferSize] = rr.center;
+		if (frameCounter > bufferSize) {
+			Point2d p = calculateMedian();
+			line(image, p, p, Scalar(0, 0, 255), 10);
+		}
+
 	}
 	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
 	drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
@@ -266,7 +283,7 @@ void trackCamshift() {
 		cvtColor(image, hls, COLOR_BGR2HLS);
 		if (trackObject1)
 		{
-			inRange(hls, Scalar(0, lmin1, 255),
+			inRange(hls, Scalar(0, lmin1, 250),
 				Scalar(180, lmax1, 255), mask);
 			int ch[] = { 0, 0 };
 			hue.create(hls.size(), hls.depth());
@@ -321,7 +338,7 @@ void trackCamshift() {
 		}
 		if (trackObject2)
 		{
-			inRange(hls, Scalar(0, lmin2, 255),
+			inRange(hls, Scalar(0, lmin2, 250),
 				Scalar(180, lmax2, 255), mask2);
 			int ch[] = { 0, 0 };
 			hue2.create(hls.size(), hls.depth());
@@ -445,17 +462,6 @@ void PnPapprox() {
 
 }
 
-void kalman() {
-	//https://docs.opencv.org/master/dc/d2c/tutorial_real_time_pose.html
-	KalmanFilter KF;
-	int nStates = 18;            // the number of states
-	int nMeasurements = 6;       // the number of measured states
-	int nInputs = 0;             // the number of action control
-	double dt = 0.125;           // time between measurements (1/FPS)
-	initKalmanFilter(KF, nStates, nMeasurements, nInputs, dt);    // init function
-
-}
-
 void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
 {
 	KF.init(nStates, nMeasurements, nInputs, CV_64F);                 // init Kalman Filter
@@ -516,12 +522,25 @@ void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int 
 	KF.measurementMatrix.at<double>(5, 11) = 1; // yaw
 }
 
+void kalman() {
+	//https://docs.opencv.org/master/dc/d2c/tutorial_real_time_pose.html
+	KalmanFilter KF;
+	int nStates = 18;            // the number of states
+	int nMeasurements = 6;       // the number of measured states
+	int nInputs = 0;             // the number of action control
+	double dt = 0.125;           // time between measurements (1/FPS)
+	initKalmanFilter(KF, nStates, nMeasurements, nInputs, dt);    // init function
+
+}
+
+
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
 	//VideoCapture cap("party_-2_l_l.mp4"); //video file
-	VideoCapture cap("auto-darker3.mp4");
+	//VideoCapture cap("auto-darker3.mp4");
 	//VideoCapture cap("night-normal.mp4");
+	VideoCapture cap("VID_20190920_155534.mp4");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
@@ -604,10 +623,10 @@ int main()
 		//detectHLSthresholds(); //show regions of specified HLS values
 		trackCamshift();
 		//LEDdetect();
-		//fitBandBlob();
-		if (!backproj.empty() && !backproj2.empty()) {
+		fitBandBlob();
+		/*if (!backproj.empty() && !backproj2.empty()) {
 			fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
-		}
+		}*/
 
 		imshow("Original", image); //show the original image
 
