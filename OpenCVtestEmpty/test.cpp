@@ -1,5 +1,6 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
+#include "test.h"
 
 using namespace std;
 using namespace cv;
@@ -54,23 +55,34 @@ Point2d pointBuffer[bufferSize];
 
 Mat imgGrey, imgBinary;
 
+//PnP
+vector <Point2d> imagePoints2D;
+vector <Point3d> modelPoints3D;
+Mat cameraMatrix, distortCoeffs;
+	//rotation and translation output
+Mat rotVec, transVec; //Rotation in axis-angle form
+//Ransac
+int iterationCount = 100;
+float reprojectionError = 8.0f;
+int minInliers = 5;
+vector <Point2d> inliersA;
 
 
 void createTrackbars() {
 	namedWindow("Control", WINDOW_NORMAL); //create a window called "Control"
 
 	//Create trackbars in "Control" window
-	cvCreateTrackbar("LowH", "Control", &lowH, 180); //Hue (0 - 180)
-	cvCreateTrackbar("HighH", "Control", &highH, 180);
+	createTrackbar("LowH", "Control", &lowH, 180); //Hue (0 - 180)
+	createTrackbar("HighH", "Control", &highH, 180);
 
-	cvCreateTrackbar("LowS", "Control", &lowS, 255); //Saturation (0 - 255)
-	cvCreateTrackbar("HighS", "Control", &highS, 255);
+	createTrackbar("LowS", "Control", &lowS, 255); //Saturation (0 - 255)
+	createTrackbar("HighS", "Control", &highS, 255);
 
-	cvCreateTrackbar("LowV", "Control", &lowV, 255); //Value (0 - 255)
-	cvCreateTrackbar("HighV", "Control", &highV, 255);
+	createTrackbar("LowV", "Control", &lowV, 255); //Value (0 - 255)
+	createTrackbar("HighV", "Control", &highV, 255);
 
-	cvCreateTrackbar("LowL", "Control", &lowL, 255); //Lightness (0 - 255)
-	cvCreateTrackbar("HighL", "Control", &highL, 255);
+	createTrackbar("LowL", "Control", &lowL, 255); //Lightness (0 - 255)
+	createTrackbar("HighL", "Control", &highL, 255);
 }
 
 void morphOpen(Mat &thresh) {
@@ -94,7 +106,7 @@ void detectHLSthresholds() {
 	morphClose(imgThresholded);
 	morphOpen(imgThresholded);
 	//find contours of filtered image using openCV findContours function
-	findContours(imgThresholded, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+	findContours(imgThresholded, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
 	drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
 
 	////Calculate the moments of the thresholded image
@@ -193,9 +205,9 @@ Point2d calculateMedian() {
 void fitBandContours(Rect roi, Rect roi2)
 {
 	Canny(backproj, cannyOut, 200, 200 * 2);
-	findContours(cannyOut, contours, hierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi.tl());
+	findContours(cannyOut, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE); //, roi.tl());
 	Canny(backproj2, cannyOut2, 200, 200 * 2);
-	findContours(cannyOut2, contours2, hierarchy2, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE); //, roi2.tl());
+	findContours(cannyOut2, contours2, hierarchy2, RETR_CCOMP, CHAIN_APPROX_SIMPLE); //, roi2.tl());
 
 	vector<Point> contourPoints;
 	for (vector<Point> v : contours) {
@@ -211,11 +223,11 @@ void fitBandContours(Rect roi, Rect roi2)
 	if (contourPoints.size() > 4) {
 		RotatedRect rr = fitEllipse(contourPoints);
 		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
-		pointBuffer[frameCounter % bufferSize] = rr.center;
+		/*pointBuffer[frameCounter % bufferSize] = rr.center;
 		if (frameCounter > bufferSize) {
 			Point2d p = calculateMedian();
 			line(image, p, p, Scalar(0, 0, 255), 10);
-		}
+		}*/
 
 	}
 	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
@@ -462,16 +474,20 @@ void greyLEDdetect(){
 
 }
 
-void PnPapprox() {
+void PnPapproxInit() {
 	//bool solvePnP(InputArray objectPoints, InputArray imagePoints, InputArray cameraMatrix, InputArray distCoeffs, OutputArray rvec, OutputArray tvec, bool useExtrinsicGuess = false, int flags = SOLVEPNP_ITERATIVE);
 	
-	//approx camera internals
+	//approx internal camera parameters
 	double focalLength = imgSizeX;
 	Point2d center = Point2d(imgSizeX / 2, imgSizeY / 2);
-	Mat cameraMatrix = (Mat_<double>(3, 3) << focalLength, 0, center.x, 0, focalLength, center.y, 0, 0, 1);
-	Mat distCoeffs = Mat::zeros(4, 1, DataType<double>::type); // Assuming no lens distortion
+	cameraMatrix = (Mat_<double>(3, 3) << focalLength, 0, center.x, 0, focalLength, center.y, 0, 0, 1);
+	distortCoeffs = Mat::zeros(4, 1, DataType<double>::type); // Assuming no lens distortion
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
+}
 
+void match2Dto3Dpoints() {
+	//sort modelPoints3D and imagePoints2D to match
+	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
 }
 
 void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
@@ -560,8 +576,8 @@ int main()
 		return -1;
 	}
 
-	cap.set(CV_CAP_PROP_FRAME_WIDTH, imgSizeX);
-	cap.set(CV_CAP_PROP_FRAME_HEIGHT, imgSizeY);
+	cap.set(CAP_PROP_FRAME_WIDTH, imgSizeX);
+	cap.set(CAP_PROP_FRAME_HEIGHT, imgSizeY);
 
 	//createTrackbars();
 
@@ -612,6 +628,8 @@ int main()
 	// SimpleBlobDetector::create creates a smart pointer. 
 	// So you need to use arrow ( ->) instead of dot ( . )
 
+	PnPapproxInit();
+
 	for(;;)
 	{
 		if (!paused) {
@@ -623,10 +641,10 @@ int main()
 				break;
 			}
 			frameCounter++;
-			if (frameCounter == cap.get(CV_CAP_PROP_FRAME_COUNT)) //if end of video file reached, start from first frame
+			if (frameCounter == cap.get(CAP_PROP_FRAME_COUNT)) //if end of video file reached, start from first frame
 			{
 				frameCounter = 1;
-				cap.set(CV_CAP_PROP_POS_FRAMES, 0);
+				cap.set(CAP_PROP_POS_FRAMES, 0);
 				cout << "Video loop" << endl;
 			}
 		}
@@ -641,6 +659,9 @@ int main()
 		}*/
 
 		greyLEDdetect();
+
+		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
+		
 
 		imshow("Original", image); //show the original image
 
