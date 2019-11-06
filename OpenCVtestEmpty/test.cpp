@@ -10,7 +10,7 @@ int imgSizeY = 360;
 Mat image;
 Mat imgHLS;
 Mat imgThresholded;
-int frameCounter = 1;
+int frameCounter = 0;
 double t;
 //these two vectors needed for output of findContours
 vector< vector<Point> > contours, contours2;
@@ -48,24 +48,31 @@ int thresh = 0;
 
 //blob detect
 Ptr<SimpleBlobDetector> detector;
-std::vector<KeyPoint> keypoints;
+vector<KeyPoint> keypoints;
 
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
 
-Mat imgGrey, imgBinary;
+Mat imgGrey, imgGreyOld, imgBinary;
 
 //PnP
 vector <Point2d> imagePoints2D;
 vector <Point3d> modelPoints3D;
 Mat cameraMatrix, distortCoeffs;
-	//rotation and translation output
+//rotation and translation output
 Mat rotVec, transVec; //Rotation in axis-angle form
+
 //Ransac
 int iterationCount = 100;
 float reprojectionError = 8.0f;
 int minInliers = 5;
-vector <Point2d> inliersA;
+vector <int> inliersA;
+
+//Optical Flow
+vector<uchar> status;
+vector<float> err;
+TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
+vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
 
 
 void createTrackbars() {
@@ -246,10 +253,9 @@ void fitBandBlob()
 		// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
 		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 		imshow("Backprojection", backprojImage);
-		vector<Point2f> points;
-		KeyPoint::convert(keypoints, points);
-		if (points.size() > 4) {
-			RotatedRect rr = fitEllipse(points);
+		KeyPoint::convert(keypoints, blobPoints);
+		if (blobPoints.size() > 4) {
+			RotatedRect rr = fitEllipse(blobPoints);
 			ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 		}
 	}
@@ -469,7 +475,7 @@ void greyLEDdetect(){
 	threshold(imgGrey, imgBinary, 240, 255, THRESH_BINARY);
 	detector->detect(imgGrey, keypoints);
 	drawKeypoints(imgGrey, keypoints, imgGrey, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-	imshow("grey", imgGrey);
+	KeyPoint::convert(keypoints, blobPoints);
 	imshow("binary", imgBinary);
 
 }
@@ -488,6 +494,7 @@ void PnPapproxInit() {
 void match2Dto3Dpoints() {
 	//sort modelPoints3D and imagePoints2D to match
 	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
+	//optical flow
 }
 
 void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
@@ -633,7 +640,7 @@ int main()
 	for(;;)
 	{
 		if (!paused) {
-			t = (double)getTickCount(); //measure time
+			t = (double)getTickCount(); //start timer
 			bool frameRead = cap.read(frame); // read a new frame from video
 			if (!frameRead) //if fail, break loop
 			{
@@ -641,9 +648,9 @@ int main()
 				break;
 			}
 			frameCounter++;
-			if (frameCounter == cap.get(CAP_PROP_FRAME_COUNT)) //if end of video file reached, start from first frame
+			if (frameCounter == cap.get(CAP_PROP_FRAME_COUNT)-1) //if end of video file reached, start from first frame
 			{
-				frameCounter = 1;
+				frameCounter = 0;
 				cap.set(CAP_PROP_POS_FRAMES, 0);
 				cout << "Video loop" << endl;
 			}
@@ -660,15 +667,26 @@ int main()
 
 		greyLEDdetect();
 
+		if (frameCounter > 1) { //if not first frame do optical flow
+			calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15,15), 2, term);
+			for (Point2f op : oldBlobPoints) {
+				circle(imgGrey, op, 3, Scalar(255,0,0));//blue
+			}
+			for (Point2f pp : blobPredictions) {
+				circle(imgGrey, pp, 3, Scalar(0, 255, 0));//green
+			}
+		}
+
 		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-
+		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 
 		//if (waitKey(0) == 32) //frame by frame with 'space'
 		//{
 		//	cout << "space key is pressed by user" << endl;
 		//}
+
 		char c = (char)waitKey(10);
 		switch (c)
 		{
@@ -692,9 +710,14 @@ int main()
 		default:
 			;
 		}
+
+		//update previous frame and points for optical flow
+		imgGreyOld = imgGrey.clone();
+		oldBlobPoints = blobPoints;
+
 		if (!paused) {
-			t = ((double)getTickCount() - t) / getTickFrequency();
-			cout << "Times passed in seconds: " << t << endl;
+			float fps = getTickFrequency() / ((double)getTickCount() - t);
+			cout << "FPS: " << fps << endl;
 		}
 	}
 
