@@ -472,12 +472,12 @@ void LEDdetect()
 
 void greyLEDdetect(){
 	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
-	threshold(imgGrey, imgBinary, 240, 255, THRESH_BINARY);
+	threshold(imgGrey, imgBinary, 240, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
+	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
 	drawKeypoints(imgGrey, keypoints, imgGrey, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, blobPoints);
-	imshow("binary", imgBinary);
-
+	//todo: sort out blobs by colour
 }
 
 void PnPapproxInit() {
@@ -491,10 +491,21 @@ void PnPapproxInit() {
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
 }
 
+void trackBlobs() {
+	if (frameCounter > 1) { //if not first frame do optical flow
+		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
+		for (Point2f op : oldBlobPoints) {
+			circle(imgGrey, op, 3, Scalar(255, 0, 0));//blue
+		}
+		for (Point2f pp : blobPredictions) {
+			circle(imgGrey, pp, 3, Scalar(0, 255, 0));//green
+		}
+	}
+}
+
 void match2Dto3Dpoints() {
 	//sort modelPoints3D and imagePoints2D to match
 	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
-	//optical flow
 }
 
 void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
@@ -667,15 +678,7 @@ int main()
 
 		greyLEDdetect();
 
-		if (frameCounter > 1) { //if not first frame do optical flow
-			calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15,15), 2, term);
-			for (Point2f op : oldBlobPoints) {
-				circle(imgGrey, op, 3, Scalar(255,0,0));//blue
-			}
-			for (Point2f pp : blobPredictions) {
-				circle(imgGrey, pp, 3, Scalar(0, 255, 0));//green
-			}
-		}
+		trackBlobs();
 
 		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
