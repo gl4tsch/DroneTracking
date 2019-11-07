@@ -73,6 +73,7 @@ vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
+float minDistThresh = 5; // max distance to match a new blob to prediction
 
 
 void createTrackbars() {
@@ -102,6 +103,26 @@ void morphClose(Mat &thresh) {
 	//morphological closing (fill small holes in the foreground)
 	dilate(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
 	erode(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
+}
+
+float euclideanDist(Point2f& p, Point2f& q) {
+	Point diff = p - q;
+	return sqrt(diff.x*diff.x + diff.y*diff.y);
+}
+
+int matchNewToPrediction(Point2f point, vector<Point2f> predictions) {
+	float minDist = numeric_limits<float>::infinity();
+	int index = -1;
+	for (int i = 0; i < predictions.size(); i++) {
+		float dist = euclideanDist(point, predictions[i]);
+		if (dist < minDist) {
+			minDist = dist;
+			if (dist < minDistThresh) {
+				index = i;
+			}
+		}
+	}
+	return index;
 }
 
 void detectHLSthresholds() {
@@ -495,10 +516,18 @@ void trackBlobs() {
 	if (frameCounter > 1) { //if not first frame do optical flow
 		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
 		for (Point2f op : oldBlobPoints) {
-			circle(imgGrey, op, 3, Scalar(255, 0, 0));//blue
+			circle(imgGrey, op, 2, Scalar(255, 0, 0), 2);//blue
 		}
 		for (Point2f pp : blobPredictions) {
-			circle(imgGrey, pp, 3, Scalar(0, 255, 0));//green
+			circle(imgGrey, pp, 2, Scalar(0, 255, 0), 2);//green
+		}
+		if (blobPoints.size() > 0) { //match previous
+			for (Point2f newPoint : blobPoints) {
+				int index = matchNewToPrediction(newPoint, blobPredictions);
+				if (index > -1){
+					// bp is old index
+				}
+			}
 		}
 	}
 }
