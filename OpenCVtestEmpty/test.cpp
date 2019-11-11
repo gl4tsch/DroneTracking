@@ -1,12 +1,19 @@
 #include <opencv2/opencv.hpp>
+#include <fstream>
 #include <iostream>
 #include "test.h"
 
 using namespace std;
 using namespace cv;
 
-int imgSizeX = 640;
-int imgSizeY = 360;
+string pathToImgSequence("video_0.006_darkblue_new/");
+vector<double> allTimestamps;
+vector<vector<double>> allTruePoses;
+vector<vector<double>> allTruePosesAtTS;
+int imgSizeX = 1280;//640;
+int imgSizeY = 1024;//360;
+int imgResizeX = 640;
+int imgResizeY = 360;
 Mat image;
 Mat imgHLS;
 Mat imgThresholded;
@@ -55,6 +62,8 @@ Point2d pointBuffer[bufferSize];
 
 Mat imgGrey, imgGreyOld, imgBinary;
 
+int minGrey = 50; //intensity threshold for grey scale image. 240 for handy footage
+
 //PnP
 vector <Point2d> imagePoints2D;
 vector <Point3d> modelPoints3D;
@@ -75,6 +84,24 @@ TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.
 vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
 float minDistThresh = 5; // max distance to match a new blob to prediction
 
+class quat {
+	public:
+		double x, y, z, w;
+
+		quat(void) {
+			x = 0;
+			y = 0;
+			z = 0;
+			w = 0;
+		}
+
+		quat(double xx, double yy, double zz, double ww) {
+			x = xx;
+			y = yy;
+			z = zz;
+			w = ww;
+		}
+};
 
 void createTrackbars() {
 	namedWindow("Control", WINDOW_NORMAL); //create a window called "Control"
@@ -108,6 +135,38 @@ void morphClose(Mat &thresh) {
 float euclideanDist(Point2f& p, Point2f& q) {
 	Point diff = p - q;
 	return sqrt(diff.x*diff.x + diff.y*diff.y);
+}
+
+quat slerp(quat qa, quat qb, double t) {
+	// quaternion to return
+	quat qm;
+	// Calculate angle between them.
+	double cosHalfTheta = qa.w * qb.w + qa.x * qb.x + qa.y * qb.y + qa.z * qb.z;
+	// if qa=qb or qa=-qb then theta = 0 and we can return qa
+	if (abs(cosHalfTheta) >= 1.0) {
+		qm.w = qa.w; qm.x = qa.x; qm.y = qa.y; qm.z = qa.z;
+		return qm;
+	}
+	// Calculate temporary values.
+	double halfTheta = acos(cosHalfTheta);
+	double sinHalfTheta = sqrt(1.0 - cosHalfTheta * cosHalfTheta);
+	// if theta = 180 degrees then result is not fully defined
+	// we could rotate around any axis normal to qa or qb
+	if (fabs(sinHalfTheta) < 0.001) { // fabs is floating point absolute
+		qm.w = (qa.w * 0.5 + qb.w * 0.5);
+		qm.x = (qa.x * 0.5 + qb.x * 0.5);
+		qm.y = (qa.y * 0.5 + qb.y * 0.5);
+		qm.z = (qa.z * 0.5 + qb.z * 0.5);
+		return qm;
+	}
+	double ratioA = sin((1 - t) * halfTheta) / sinHalfTheta;
+	double ratioB = sin(t * halfTheta) / sinHalfTheta;
+	//calculate Quaternion.
+	qm.w = (qa.w * ratioA + qb.w * ratioB);
+	qm.x = (qa.x * ratioA + qb.x * ratioB);
+	qm.y = (qa.y * ratioA + qb.y * ratioB);
+	qm.z = (qa.z * ratioA + qb.z * ratioB);
+	return qm;
 }
 
 int matchNewToPrediction(Point2f point, vector<Point2f> predictions) {
@@ -493,7 +552,7 @@ void LEDdetect()
 
 void greyLEDdetect(){
 	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
-	threshold(imgGrey, imgBinary, 240, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
+	threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
 	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
 	drawKeypoints(imgGrey, keypoints, imgGrey, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
@@ -510,6 +569,118 @@ void PnPapproxInit() {
 	cameraMatrix = (Mat_<double>(3, 3) << focalLength, 0, center.x, 0, focalLength, center.y, 0, 0, 1);
 	distortCoeffs = Mat::zeros(4, 1, DataType<double>::type); // Assuming no lens distortion
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
+}
+
+void PnPinit() {
+	//internal camera parameters
+	double focalLengthX = 1056.547145;
+	double focalLengthY = 1056.333864;
+	Point2d center = Point2d(638.890253, imgSizeY - 1 - 499.522829);
+	cameraMatrix = (Mat_<double>(3, 3) << focalLengthX, 0, center.x, 0, focalLengthY, center.y, 0, 0, 1);
+	distortCoeffs = Mat::zeros(4, 1, DataType<double>::type); // image already undistorted
+	cout << "Camera Matrix " << endl << cameraMatrix << endl;
+}
+
+vector<double> readAllTS(string pathToFile) {
+	double ts;
+	string frameName;
+	vector<double> timeStamps;
+	ifstream tsFile(pathToFile);
+	while (tsFile >> ts >> frameName) {
+		timeStamps.push_back(ts);
+	}
+	tsFile.close();
+	return timeStamps;
+}
+
+vector<vector<double>> readAllPoses(string pathToFile) {
+	double ts, rx, ry, rz, rw, tx, ty, tz, one;
+	vector<vector<double>> poses;
+	string line;
+	ifstream poseFile(pathToFile);
+	getline(poseFile,line);
+	getline(poseFile, line);//throw away the first 2 strangely formated lines
+	while (poseFile >> ts >> rx >> ry >> rz >> rw >> tx >> ty >> tz >> one) {
+		vector<double> pose;
+		pose.push_back(ts);
+		pose.push_back(rx);
+		pose.push_back(ry);
+		pose.push_back(rz);
+		pose.push_back(rw);
+		pose.push_back(tx);
+		pose.push_back(ty);
+		pose.push_back(tz);
+		poses.push_back(pose);
+	}
+	poseFile.close();
+	return poses;
+}
+
+
+vector<vector<double>> calculateAllTruePosesAtTstamps() {
+	double frameTS;
+	vector<vector<double>> posesToTimeStamps;
+	vector<double> poseAtTS;
+	int bookMark = 0;
+	for (int i = 0; i < allTimestamps.size(); i++) {
+		frameTS = allTimestamps[i];
+		
+		for (int ii = bookMark; ii < allTruePoses.size(); ii++) { //loop through all prerecorded poses until timestamp is bigger than current frame i
+			double poseTS = allTruePoses[ii][0];
+			if (poseTS > frameTS) {
+				vector<double> poseLeft = allTruePoses[ii - 1];
+				vector<double> poseRight = allTruePoses[ii];
+
+				//calc pose at frameTS
+				vector<double>poseAtTS;
+				poseAtTS.push_back(frameTS);
+				double relation = (poseTS - poseLeft[0]) / (poseRight[0] - poseLeft[0]);
+
+				//slerp quaternion
+				quat qa = quat(poseLeft[1], poseLeft[2], poseLeft[3], poseLeft[4]);
+				quat qb = quat(poseRight[1], poseRight[2], poseRight[3], poseRight[4]);
+				quat qm = slerp(qa, qb, relation); //<--
+
+				//lerp position
+				Point3d pa = Point3d(poseLeft[5], poseLeft[6], poseLeft[7]);
+				Point3d pb = Point3d(poseRight[5], poseRight[6], poseRight[7]);
+				Point3d pm = relation * pb + (1 - relation) * pa; //<--
+
+				poseAtTS.push_back(qm.x);
+				poseAtTS.push_back(qm.y);
+				poseAtTS.push_back(qm.z);
+				poseAtTS.push_back(qm.w);
+				poseAtTS.push_back(pm.x);
+				poseAtTS.push_back(pm.y);
+				poseAtTS.push_back(pm.z);
+				bookMark = ii;
+				break;
+			}
+		}
+		posesToTimeStamps.push_back(poseAtTS);
+	}
+	return posesToTimeStamps;
+}
+
+void drawTruePose(int frame) {
+	vector<Point3d> testpoints;
+	vector<Point2d> outputTestPoints;
+	Point3d p = Point3d(0, 0, 0);
+	testpoints.push_back(p);
+	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
+	vector<double> rotvec, transvec;
+	double qx = allTruePosesAtTS[frame][1];
+	double qy = allTruePosesAtTS[frame][2];
+	double qz = allTruePosesAtTS[frame][3];
+	double qw = allTruePosesAtTS[frame][4];
+	double angle = 2 * acos(qw);
+	double xAxis = qx / sqrt(1 - qw * qw);
+	double yAxis = qy / sqrt(1 - qw * qw);
+	double zAxis = qz / sqrt(1 - qw * qw);
+	transvec.push_back(allTruePosesAtTS[frame][5]);//x
+	transvec.push_back(allTruePosesAtTS[frame][6]);//y
+	transvec.push_back(allTruePosesAtTS[frame][7]);//z
+	//projectPoints(testpoints, , transvec, cameraMatrix, distortCoeffs, outputTestPoints); //todo: get rotvec
 }
 
 void trackBlobs() {
@@ -615,7 +786,8 @@ int main()
 	//VideoCapture cap("party_-2_l_l.mp4"); //video file
 	//VideoCapture cap("auto-darker3.mp4");
 	//VideoCapture cap("night-normal.mp4");
-	VideoCapture cap("VID_20190920_155534.mp4");
+	//VideoCapture cap("VID_20190920_155534.mp4");
+	VideoCapture cap(pathToImgSequence + "img00000.png");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
@@ -625,6 +797,10 @@ int main()
 
 	cap.set(CAP_PROP_FRAME_WIDTH, imgSizeX);
 	cap.set(CAP_PROP_FRAME_HEIGHT, imgSizeY);
+
+	allTimestamps = readAllTS(pathToImgSequence + "ts.txt");
+	allTruePoses = readAllPoses(pathToImgSequence + "Camera2Targret.txt");
+	allTruePosesAtTS = calculateAllTruePosesAtTstamps();
 
 	//createTrackbars();
 
@@ -644,11 +820,11 @@ int main()
 	SimpleBlobDetector::Params params;
 	
 	// Change thresholds
-	params.minThreshold = 240;
+	params.minThreshold = minGrey; //240 for handy footage
 	params.maxThreshold = 255;
 
 	// Filter by Area.
-	params.filterByArea = true;
+	params.filterByArea = false; //true for handy
 	params.minArea = 3;
 
 	// Filter by Circularity
@@ -660,11 +836,11 @@ int main()
 	params.minConvexity = 0.87;
 
 	// Filter by Inertia
-	params.filterByInertia = true;
+	params.filterByInertia = false; //true for handy
 	params.minInertiaRatio = 0.01;
 
 	// Blob merge distance
-	params.minDistBetweenBlobs = 3;
+	params.minDistBetweenBlobs = 0; //3 for handy
 
 	// Blob intensity
 	params.filterByColor = false;
@@ -675,7 +851,8 @@ int main()
 	// SimpleBlobDetector::create creates a smart pointer. 
 	// So you need to use arrow ( ->) instead of dot ( . )
 
-	PnPapproxInit();
+	//PnPapproxInit();
+	PnPinit();
 
 	for(;;)
 	{
@@ -695,7 +872,8 @@ int main()
 				cout << "Video loop" << endl;
 			}
 		}
-		resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
+		//resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
+		frame.copyTo(image);
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		//trackCamshift();
@@ -705,12 +883,21 @@ int main()
 			fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
 		}*/
 
+
 		greyLEDdetect();
 
-		trackBlobs();
+		//trackBlobs();
 
 		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
+		drawTruePose(frameCounter);
+
+		//update previous frame and points for optical flow
+		imgGreyOld = imgGrey.clone();
+		oldBlobPoints = blobPoints;
+
+		//resize(imgGrey, imgGrey, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
+		//resize(image, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 
@@ -742,10 +929,6 @@ int main()
 		default:
 			;
 		}
-
-		//update previous frame and points for optical flow
-		imgGreyOld = imgGrey.clone();
-		oldBlobPoints = blobPoints;
 
 		if (!paused) {
 			float fps = getTickFrequency() / ((double)getTickCount() - t);

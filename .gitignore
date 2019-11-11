@@ -197,3 +197,4 @@ FakesAssemblies/
 
 # Video Files
 *.mp4
+/OpenCVtestEmpty/video_0.006_darkblue_new/*
