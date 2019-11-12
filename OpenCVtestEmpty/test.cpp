@@ -7,7 +7,7 @@ using namespace std;
 using namespace cv;
 
 //ground truth
-string pathToImgSequence("video_0.006_darkblue_new/");
+string pathToImgSequence("video_1.003_darkblue_new/");
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
@@ -19,7 +19,7 @@ int imgResizeY = 360;
 Mat image;
 Mat imgHLS;
 Mat imgThresholded;
-int startFrame = 192;
+int startFrame = 158; //0.006_darkblue_new: 192
 int frameCounter = startFrame;
 double t;
 //these two vectors needed for output of findContours
@@ -59,13 +59,12 @@ int thresh = 0;
 //blob detect
 Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
+int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage
 
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
 
 Mat imgGrey, imgGreyOld, imgBinary;
-
-int minGrey = 50; //intensity threshold for grey scale image. 240 for handy footage
 
 //PnP
 vector <Point2d> imagePoints2D;
