@@ -6,10 +6,12 @@
 using namespace std;
 using namespace cv;
 
+//ground truth
 string pathToImgSequence("video_0.006_darkblue_new/");
-vector<double> allTimestamps;
+vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
-vector<vector<double>> allTruePosesAtTS;
+vector<vector<double>> allSLERPedPoses;
+
 int imgSizeX = 1280;//640;
 int imgSizeY = 1024;//360;
 int imgResizeX = 640;
@@ -17,7 +19,8 @@ int imgResizeY = 360;
 Mat image;
 Mat imgHLS;
 Mat imgThresholded;
-int frameCounter = 0;
+int startFrame = 192;
+int frameCounter = startFrame;
 double t;
 //these two vectors needed for output of findContours
 vector< vector<Point> > contours, contours2;
@@ -138,6 +141,7 @@ float euclideanDist(Point2f& p, Point2f& q) {
 }
 
 quat slerp(quat qa, quat qb, double t) {
+	//https://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/slerp/index.htm
 	// quaternion to return
 	quat qm;
 	// Calculate angle between them.
@@ -593,6 +597,20 @@ vector<double> readAllTS(string pathToFile) {
 	return timeStamps;
 }
 
+vector<Point3d> fillModelPoints() {
+	Point3d LED1 = Point3d(2.67097532115543046e-01, -3.47028848784865090e-02, 1.71293486959551572e-01);
+	Point3d LED2 = Point3d(2.47425499670097748e-01, -3.36907769164135340e-02, 1.99522292397339263e-01);
+	Point3d LED3 = Point3d(2.21684687650311907e-01, -3.22243632083136639e-02, 2.21157774715360605e-01);
+	Point3d LED4 = Point3d(1.91487232768038446e-01, -3.06480855540219206e-02, 2.37121236105386574e-01);
+	Point3d LED5 = Point3d(1.58621091131353253e-01, -2.94846784427151495e-02, 2.44794772578041803e-01);
+	Point3d LED6 = Point3d(1.25148501293946501e-01, -2.64061662524335758e-02, 2.44441906540085907e-01);
+	Point3d LED7 = Point3d(9.22603348005930773e-02, -2.45705276530471320e-02, 2.35824422950973500e-01);
+	Point3d LED8 = Point3d(6.15248984566603985e-02, -2.44769579196429457e-02, 2.19972846145236156e-01);
+	Point3d LED9 = Point3d(3.71471618613731930e-02, -2.49878525424118911e-02, 1.97927458344047347e-01);
+	Point3d LED10 = Point3d(1.74547127144131856e-02, -2.65532292111988720e-02, 1.70035917308056728e-01);
+	return vector<Point3d>{LED1, LED2, LED3, LED4, LED5, LED6, LED7, LED8, LED9, LED10};
+}
+
 vector<vector<double>> readAllPoses(string pathToFile) {
 	double ts, rx, ry, rz, rw, tx, ty, tz, one;
 	vector<vector<double>> poses;
@@ -617,13 +635,13 @@ vector<vector<double>> readAllPoses(string pathToFile) {
 }
 
 
-vector<vector<double>> calculateAllTruePosesAtTstamps() {
+vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 	double frameTS;
 	vector<vector<double>> posesToTimeStamps;
 	vector<double> poseAtTS;
 	int bookMark = 0;
-	for (int i = 0; i < allTimestamps.size(); i++) {
-		frameTS = allTimestamps[i];
+	for (int i = 0; i < allFrameTimeStamps.size(); i++) {
+		frameTS = allFrameTimeStamps[i];
 		
 		for (int ii = bookMark; ii < allTruePoses.size(); ii++) { //loop through all prerecorded poses until timestamp is bigger than current frame i
 			double poseTS = allTruePoses[ii][0];
@@ -669,22 +687,22 @@ void drawTruePose(int frame) {
 	testpoints.push_back(p);
 	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
 	vector<double> rotvec, transvec;
-	double qx = allTruePosesAtTS[frame][1];
-	double qy = allTruePosesAtTS[frame][2];
-	double qz = allTruePosesAtTS[frame][3];
-	double qw = allTruePosesAtTS[frame][4];
+	double qx = allSLERPedPoses[frame][1];
+	double qy = allSLERPedPoses[frame][2];
+	double qz = allSLERPedPoses[frame][3];
+	double qw = allSLERPedPoses[frame][4];
 	double angle = 2 * acos(qw);
 	double xAxis = qx / sqrt(1 - qw * qw);
 	double yAxis = qy / sqrt(1 - qw * qw);
 	double zAxis = qz / sqrt(1 - qw * qw);
-	transvec.push_back(allTruePosesAtTS[frame][5]);//x
-	transvec.push_back(allTruePosesAtTS[frame][6]);//y
-	transvec.push_back(allTruePosesAtTS[frame][7]);//z
+	transvec.push_back(allSLERPedPoses[frame][5]);//x
+	transvec.push_back(allSLERPedPoses[frame][6]);//y
+	transvec.push_back(allSLERPedPoses[frame][7]);//z
 	//projectPoints(testpoints, , transvec, cameraMatrix, distortCoeffs, outputTestPoints); //todo: get rotvec
 }
 
 void trackBlobs() {
-	if (frameCounter > 1) { //if not first frame do optical flow
+	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
 		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
 		for (Point2f op : oldBlobPoints) {
 			circle(imgGrey, op, 2, Scalar(255, 0, 0), 2);//blue
@@ -795,12 +813,16 @@ int main()
 		return -1;
 	}
 
+	cap.set(CAP_PROP_POS_FRAMES, startFrame); //offset start frame
+
 	cap.set(CAP_PROP_FRAME_WIDTH, imgSizeX);
 	cap.set(CAP_PROP_FRAME_HEIGHT, imgSizeY);
 
-	allTimestamps = readAllTS(pathToImgSequence + "ts.txt");
+	//fill ground truth from files
+	allFrameTimeStamps = readAllTS(pathToImgSequence + "ts.txt");
 	allTruePoses = readAllPoses(pathToImgSequence + "Camera2Targret.txt");
-	allTruePosesAtTS = calculateAllTruePosesAtTstamps();
+	allSLERPedPoses = interpolateAllTruePosesAtFrameTS();
+	modelPoints3D = fillModelPoints();
 
 	//createTrackbars();
 
@@ -858,7 +880,7 @@ int main()
 	{
 		if (!paused) {
 			t = (double)getTickCount(); //start timer
-			bool frameRead = cap.read(frame); // read a new frame from video
+			bool frameRead = cap.read(image); // read a new frame from video (frame | image)
 			if (!frameRead) //if fail, break loop
 			{
 				cout << "Cannot read a frame from video stream" << endl;
@@ -867,13 +889,12 @@ int main()
 			frameCounter++;
 			if (frameCounter == cap.get(CAP_PROP_FRAME_COUNT)-1) //if end of video file reached, start from first frame
 			{
-				frameCounter = 0;
-				cap.set(CAP_PROP_POS_FRAMES, 0);
+				frameCounter = startFrame;
+				cap.set(CAP_PROP_POS_FRAMES, startFrame);
 				cout << "Video loop" << endl;
 			}
 		}
 		//resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
-		frame.copyTo(image);
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		//trackCamshift();
@@ -886,11 +907,11 @@ int main()
 
 		greyLEDdetect();
 
-		//trackBlobs();
+		trackBlobs();
 
 		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		drawTruePose(frameCounter);
+		//drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
