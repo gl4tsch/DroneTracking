@@ -1,4 +1,5 @@
 #include <opencv2/opencv.hpp>
+#include <opencv2/imgproc.hpp>
 #include <fstream>
 #include <iostream>
 #include "test.h"
@@ -558,7 +559,7 @@ void greyLEDdetect(){
 	threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
 	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
-	drawKeypoints(imgGrey, keypoints, imgGrey, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	drawKeypoints(imgGrey, keypoints, image, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, blobPoints);
 	//todo: sort out blobs by colour
 }
@@ -651,7 +652,7 @@ vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 				//calc pose at frameTS
 				vector<double>poseAtTS;
 				poseAtTS.push_back(frameTS);
-				double relation = (poseTS - poseLeft[0]) / (poseRight[0] - poseLeft[0]);
+				double relation = (frameTS - poseLeft[0]) / (poseTS - poseLeft[0]);
 
 				//slerp quaternion
 				quat qa = quat(poseLeft[1], poseLeft[2], poseLeft[3], poseLeft[4]);
@@ -670,11 +671,11 @@ vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 				poseAtTS.push_back(pm.x);
 				poseAtTS.push_back(pm.y);
 				poseAtTS.push_back(pm.z);
+				posesToTimeStamps.push_back(poseAtTS); // fill return vector
 				bookMark = ii;
 				break;
 			}
 		}
-		posesToTimeStamps.push_back(poseAtTS);
 	}
 	return posesToTimeStamps;
 }
@@ -683,40 +684,107 @@ void drawTruePose(int frame) {
 	vector<Point3d> testpoints;
 	vector<Point2d> outputTestPoints;
 	Point3d p = Point3d(0, 0, 0);
+	testpoints = modelPoints3D;
 	testpoints.push_back(p);
-	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
+
 	vector<double> rotvec, transvec;
-	double qx = allSLERPedPoses[frame][1];
-	double qy = allSLERPedPoses[frame][2];
-	double qz = allSLERPedPoses[frame][3];
-	double qw = allSLERPedPoses[frame][4];
-	double angle = 2 * acos(qw);
+	double qx = allSLERPedPoses[frame-1][1];
+	double qy = allSLERPedPoses[frame-1][2];
+	double qz = allSLERPedPoses[frame-1][3];
+	double qw = allSLERPedPoses[frame-1][4];
+
+//axis angle
+	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
+	/*double angle = 2 * acos(qw);
 	double xAxis = qx / sqrt(1 - qw * qw);
 	double yAxis = qy / sqrt(1 - qw * qw);
 	double zAxis = qz / sqrt(1 - qw * qw);
-	transvec.push_back(allSLERPedPoses[frame][5]);//x
-	transvec.push_back(allSLERPedPoses[frame][6]);//y
-	transvec.push_back(allSLERPedPoses[frame][7]);//z
-	//projectPoints(testpoints, , transvec, cameraMatrix, distortCoeffs, outputTestPoints); //todo: get rotvec
+	
+	rotvec.push_back(xAxis);
+	rotvec.push_back(yAxis);
+	rotvec.push_back(zAxis);
+	rotvec.push_back(angle);*/
+
+//rot matrix
+	//quaternion to rotation matrix, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToMatrix/index.htm
+	double sqw = qw*qw;
+    double sqx = qx*qx;
+    double sqy = qy*qy;
+    double sqz = qz*qz;
+
+    // invs (inverse square length) is only required if quaternion is not already normalised
+	double invs = 1 / (sqx + sqy + sqz + sqw);
+    double m00 = ( sqx - sqy - sqz + sqw)*invs ; // since sqw + sqx + sqy + sqz =1/invs*invs
+	double m11 = (-sqx + sqy - sqz + sqw)*invs ;
+	double m22 = (-sqx - sqy + sqz + sqw)*invs ;
+    
+    double tmp1 = qx*qy;
+    double tmp2 = qz*qw;
+	double m10 = 2.0 * (tmp1 + tmp2)*invs ;
+	double m01 = 2.0 * (tmp1 - tmp2)*invs ;
+    
+    tmp1 = qx*qz;
+    tmp2 = qy*qw;
+	double m20 = 2.0 * (tmp1 - tmp2)*invs ;
+	double m02 = 2.0 * (tmp1 + tmp2)*invs ;
+    tmp1 = qy*qz;
+    tmp2 = qx*qw;
+	double m21 = 2.0 * (tmp1 + tmp2)*invs ;
+	double m12 = 2.0 * (tmp1 - tmp2)*invs ;
+
+	Mat rotmat = (Mat_<double>(3,3) << m00, m01, m02, m10, m11, m12, m20, m21, m22);
+	Rodrigues(rotmat, rotvec);
+
+	transvec.push_back(allSLERPedPoses[frame-1][5]);//x
+	transvec.push_back(allSLERPedPoses[frame-1][6]);//y
+	transvec.push_back(allSLERPedPoses[frame-1][7]);//z
+
+	projectPoints(testpoints, rotvec, transvec, cameraMatrix, distortCoeffs, outputTestPoints);
+	for (Point2d p : outputTestPoints) {
+		circle(image, p, 1, Scalar(0, 255, 0), 2);
+	}
 }
 
 void trackBlobs() {
 	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
-		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
-		for (Point2f op : oldBlobPoints) {
-			circle(imgGrey, op, 2, Scalar(255, 0, 0), 2);//blue
-		}
-		for (Point2f pp : blobPredictions) {
-			circle(imgGrey, pp, 2, Scalar(0, 255, 0), 2);//green
-		}
-		if (blobPoints.size() > 0) { //match previous
-			for (Point2f newPoint : blobPoints) {
-				int index = matchNewToPrediction(newPoint, blobPredictions);
-				if (index > -1){
-					// bp is old index
-				}
-			}
-		}
+
+	//dense optical flow:
+		Mat flow(imgGreyOld.size(), CV_32FC2);
+		calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
+		// visualization
+		Mat flow_parts[2];
+		split(flow, flow_parts);
+		Mat magnitude, angle, magn_norm;
+		cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
+		normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
+		angle *= ((1.f / 360.f) * (180.f / 255.f));
+		//build hsv image
+		Mat _hsv[3], hsv, hsv8, bgr;
+		_hsv[0] = angle;
+		_hsv[1] = Mat::ones(angle.size(), CV_32F);
+		_hsv[2] = magn_norm;
+		merge(_hsv, 3, hsv);
+		hsv.convertTo(hsv8, CV_8U, 255.0);
+		cvtColor(hsv8, bgr, COLOR_HSV2BGR);
+		imshow("frame2", bgr);
+
+
+	//sparse optical flow:
+		//calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
+		//for (Point2f op : oldBlobPoints) {
+		//	circle(imgGrey, op, 2, Scalar(255, 0, 0), 2);//blue
+		//}
+		//for (Point2f pp : blobPredictions) {
+		//	circle(imgGrey, pp, 2, Scalar(0, 255, 0), 2);//green
+		//}
+		//if (blobPoints.size() > 0) { //match previous
+		//	for (Point2f newPoint : blobPoints) {
+		//		int index = matchNewToPrediction(newPoint, blobPredictions);
+		//		if (index > -1){
+		//			// bp is old index
+		//		}
+		//	}
+		//}
 	}
 }
 
@@ -906,11 +974,11 @@ int main()
 
 		greyLEDdetect();
 
-		trackBlobs();
+		//trackBlobs();
 
 		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		//drawTruePose(frameCounter);
+		drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
