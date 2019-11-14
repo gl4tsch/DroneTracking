@@ -2,6 +2,7 @@
 #include <opencv2/imgproc.hpp>
 #include <fstream>
 #include <iostream>
+#include <cmath>
 #include "test.h"
 
 using namespace std;
@@ -9,6 +10,7 @@ using namespace cv;
 
 //ground truth
 string pathToImgSequence("video_1.003_darkblue_new/");
+int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
@@ -20,7 +22,6 @@ int imgResizeY = 360;
 Mat image;
 Mat imgHLS;
 Mat imgThresholded;
-int startFrame = 158; //0.006_darkblue_new: 192
 int frameCounter = startFrame;
 double t;
 //these two vectors needed for output of findContours
@@ -60,7 +61,8 @@ int thresh = 0;
 //blob detect
 Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
-int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage
+int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
+vector<int> blobToBlobMatching;
 
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
@@ -85,7 +87,6 @@ vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
-float minDistThresh = 5; // max distance to match a new blob to prediction
 
 class quat {
 	public:
@@ -173,7 +174,7 @@ quat slerp(quat qa, quat qb, double t) {
 	return qm;
 }
 
-int matchNewToPrediction(Point2f point, vector<Point2f> predictions) {
+int matchNewToPrediction(Point2f point, vector<Point2f> predictions, float minDistThresh) {
 	float minDist = numeric_limits<float>::infinity();
 	int index = -1;
 	for (int i = 0; i < predictions.size(); i++) {
@@ -559,7 +560,7 @@ void greyLEDdetect(){
 	threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
 	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
-	drawKeypoints(imgGrey, keypoints, image, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	drawKeypoints(image, keypoints, image, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, blobPoints);
 	//todo: sort out blobs by colour
 }
@@ -585,6 +586,27 @@ void PnPinit() {
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
 }
 
+struct point_sorter{ // less for points
+	bool operator ()(const Point2d& a, const Point2d& b)
+	{
+		return (a.x < b.x);
+	}
+};
+
+void PnPtest() {
+	vector<double> rvecTest, tvecTest;
+	vector<Point2d> outputTestPoints;
+	//sort blobs by x coordinate descending
+	sort(blobPoints.begin(), blobPoints.end(), point_sorter());
+
+	solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_EPNP);
+	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
+
+	for (Point2d p : outputTestPoints) {
+		circle(image, p, 1, Scalar(0, 255, 0), 2);
+	}
+}
+
 vector<double> readAllTS(string pathToFile) {
 	double ts;
 	string frameName;
@@ -598,16 +620,16 @@ vector<double> readAllTS(string pathToFile) {
 }
 
 vector<Point3d> fillModelPoints() {
-	Point3d LED1 = Point3d(2.67097532115543046e-01, -3.47028848784865090e-02, 1.71293486959551572e-01);
-	Point3d LED2 = Point3d(2.47425499670097748e-01, -3.36907769164135340e-02, 1.99522292397339263e-01);
-	Point3d LED3 = Point3d(2.21684687650311907e-01, -3.22243632083136639e-02, 2.21157774715360605e-01);
-	Point3d LED4 = Point3d(1.91487232768038446e-01, -3.06480855540219206e-02, 2.37121236105386574e-01);
-	Point3d LED5 = Point3d(1.58621091131353253e-01, -2.94846784427151495e-02, 2.44794772578041803e-01);
-	Point3d LED6 = Point3d(1.25148501293946501e-01, -2.64061662524335758e-02, 2.44441906540085907e-01);
-	Point3d LED7 = Point3d(9.22603348005930773e-02, -2.45705276530471320e-02, 2.35824422950973500e-01);
-	Point3d LED8 = Point3d(6.15248984566603985e-02, -2.44769579196429457e-02, 2.19972846145236156e-01);
-	Point3d LED9 = Point3d(3.71471618613731930e-02, -2.49878525424118911e-02, 1.97927458344047347e-01);
-	Point3d LED10 = Point3d(1.74547127144131856e-02, -2.65532292111988720e-02, 1.70035917308056728e-01);
+	Point3d LED10 = Point3d(2.67097532115543046e-01, -3.47028848784865090e-02, 1.71293486959551572e-01);
+	Point3d LED9 = Point3d(2.47425499670097748e-01, -3.36907769164135340e-02, 1.99522292397339263e-01);
+	Point3d LED8 = Point3d(2.21684687650311907e-01, -3.22243632083136639e-02, 2.21157774715360605e-01);
+	Point3d LED7 = Point3d(1.91487232768038446e-01, -3.06480855540219206e-02, 2.37121236105386574e-01);
+	Point3d LED6 = Point3d(1.58621091131353253e-01, -2.94846784427151495e-02, 2.44794772578041803e-01);
+	Point3d LED5 = Point3d(1.25148501293946501e-01, -2.64061662524335758e-02, 2.44441906540085907e-01);
+	Point3d LED4 = Point3d(9.22603348005930773e-02, -2.45705276530471320e-02, 2.35824422950973500e-01);
+	Point3d LED3 = Point3d(6.15248984566603985e-02, -2.44769579196429457e-02, 2.19972846145236156e-01);
+	Point3d LED2 = Point3d(3.71471618613731930e-02, -2.49878525424118911e-02, 1.97927458344047347e-01);
+	Point3d LED1 = Point3d(1.74547127144131856e-02, -2.65532292111988720e-02, 1.70035917308056728e-01);
 	return vector<Point3d>{LED1, LED2, LED3, LED4, LED5, LED6, LED7, LED8, LED9, LED10};
 }
 
@@ -633,7 +655,6 @@ vector<vector<double>> readAllPoses(string pathToFile) {
 	poseFile.close();
 	return poses;
 }
-
 
 vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 	double frameTS;
@@ -681,11 +702,11 @@ vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 }
 
 void drawTruePose(int frame) {
-	vector<Point3d> testpoints;
-	vector<Point2d> outputTestPoints;
+	vector<Point3d> truePoints;
+	vector<Point2d> trueImgPoints;
 	Point3d p = Point3d(0, 0, 0);
-	testpoints = modelPoints3D;
-	testpoints.push_back(p);
+	truePoints = modelPoints3D;
+	truePoints.push_back(p);
 
 	vector<double> rotvec, transvec;
 	double qx = allSLERPedPoses[frame-1][1];
@@ -731,16 +752,23 @@ void drawTruePose(int frame) {
     tmp2 = qx*qw;
 	double m21 = 2.0 * (tmp1 + tmp2)*invs ;
 	double m12 = 2.0 * (tmp1 - tmp2)*invs ;
+	
+	Mat rotmat = (Mat_<double>(3, 3) << m00, m01, m02, m10, m11, m12, m20, m21, m22);
+	//Mat rotmat = (Mat_<double>(3, 3) << m00, m10, m20, m01, m11, m21, m02, m12, m22);
 
-	Mat rotmat = (Mat_<double>(3,3) << m00, m01, m02, m10, m11, m12, m20, m21, m22);
+	float rotAngle = CV_PI; //180 deg
+	Mat rotCorrection = (Mat_<double>(3, 3) << 1, 0, 0, 0, cos(rotAngle), -sin(rotAngle), 0, sin(rotAngle), cos(rotAngle));
+
+	rotmat = rotCorrection * rotmat;
+
 	Rodrigues(rotmat, rotvec);
 
 	transvec.push_back(allSLERPedPoses[frame-1][5]);//x
-	transvec.push_back(allSLERPedPoses[frame-1][6]);//y
-	transvec.push_back(allSLERPedPoses[frame-1][7]);//z
+	transvec.push_back(-allSLERPedPoses[frame-1][6]);//y
+	transvec.push_back(-allSLERPedPoses[frame-1][7]);//z
 
-	projectPoints(testpoints, rotvec, transvec, cameraMatrix, distortCoeffs, outputTestPoints);
-	for (Point2d p : outputTestPoints) {
+	projectPoints(truePoints, rotvec, transvec, cameraMatrix, distortCoeffs, trueImgPoints);
+	for (Point2d p : trueImgPoints) {
 		circle(image, p, 1, Scalar(0, 255, 0), 2);
 	}
 }
@@ -749,46 +777,49 @@ void trackBlobs() {
 	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
 
 	//dense optical flow:
-		Mat flow(imgGreyOld.size(), CV_32FC2);
-		calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
-		// visualization
-		Mat flow_parts[2];
-		split(flow, flow_parts);
-		Mat magnitude, angle, magn_norm;
-		cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
-		normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
-		angle *= ((1.f / 360.f) * (180.f / 255.f));
-		//build hsv image
-		Mat _hsv[3], hsv, hsv8, bgr;
-		_hsv[0] = angle;
-		_hsv[1] = Mat::ones(angle.size(), CV_32F);
-		_hsv[2] = magn_norm;
-		merge(_hsv, 3, hsv);
-		hsv.convertTo(hsv8, CV_8U, 255.0);
-		cvtColor(hsv8, bgr, COLOR_HSV2BGR);
-		imshow("frame2", bgr);
+		//Mat flow(imgGreyOld.size(), CV_32FC2);
+		//calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
+		//// visualization
+		//Mat flow_parts[2];
+		//split(flow, flow_parts);
+		//Mat magnitude, angle, magn_norm;
+		//cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
+		//normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
+		//angle *= ((1.f / 360.f) * (180.f / 255.f));
+		////build hsv image
+		//Mat _hsv[3], hsv, hsv8, bgr;
+		//_hsv[0] = angle;
+		//_hsv[1] = Mat::ones(angle.size(), CV_32F);
+		//_hsv[2] = magn_norm;
+		//merge(_hsv, 3, hsv);
+		//hsv.convertTo(hsv8, CV_8U, 255.0);
+		//cvtColor(hsv8, bgr, COLOR_HSV2BGR);
+		//imshow("frame2", bgr);
 
 
 	//sparse optical flow:
-		//calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
-		//for (Point2f op : oldBlobPoints) {
-		//	circle(imgGrey, op, 2, Scalar(255, 0, 0), 2);//blue
-		//}
-		//for (Point2f pp : blobPredictions) {
-		//	circle(imgGrey, pp, 2, Scalar(0, 255, 0), 2);//green
-		//}
-		//if (blobPoints.size() > 0) { //match previous
-		//	for (Point2f newPoint : blobPoints) {
-		//		int index = matchNewToPrediction(newPoint, blobPredictions);
-		//		if (index > -1){
-		//			// bp is old index
-		//		}
-		//	}
-		//}
+		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
+		for (Point2f op : oldBlobPoints) {
+			circle(image, op, 2, Scalar(255, 0, 0), 2);//blue
+		}
+		for (Point2f pp : blobPredictions) {
+			circle(image, pp, 2, Scalar(0, 255, 255), 2);//yellow
+		}
+		if (blobPoints.size() > 0) { //match previous
+			for (int i = 0; i < blobPoints.size(); i++) {
+				int index = matchNewToPrediction(blobPoints[i], blobPredictions, 5);
+				//blobToBlobMatching[i] = index; //new blob in blobPoints at i is old blob in blobPredictions at blobToBlobMatching[i] (-1 if no match)
+			}
+		}
 	}
 }
 
-void match2Dto3Dpoints() {
+void calculatePose() {
+	//solvePnP(detectedLEDpositions, correspondingBlobs, );
+}
+
+void matchBlobsToLED() {
+
 	//sort modelPoints3D and imagePoints2D to match
 	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
 }
@@ -973,12 +1004,13 @@ int main()
 
 
 		greyLEDdetect();
-
+		PnPtest();
 		//trackBlobs();
 
-		//solvePnPRansac(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
+		//calculatePose();
+		//solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		drawTruePose(frameCounter);
+		//drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
@@ -989,10 +1021,10 @@ int main()
 		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 
-		//if (waitKey(0) == 32) //frame by frame with 'space'
-		//{
-		//	cout << "space key is pressed by user" << endl;
-		//}
+		if (waitKey(0) == 32) //frame by frame with 'space'
+		{
+			cout << "space key is pressed by user" << endl;
+		}
 
 		char c = (char)waitKey(10);
 		switch (c)
