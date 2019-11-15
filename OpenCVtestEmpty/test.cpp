@@ -62,7 +62,11 @@ int thresh = 0;
 Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
 int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
-vector<int> blobToBlobMatching;
+
+//new blob in blobPoints at i corresponds to old blob in blobPredictions at blobToPredictionMatching[i] (-1 if no match)
+vector<int> blobToPredictionMatching;
+//LED in modelPonts3D at i corresponds to detected blob in blobPoints at LEDtoBlobMatching[i] (-1 if no match)
+vector<int> LEDtoBlobMatching;
 
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
@@ -87,6 +91,18 @@ vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
+
+struct point_sorter { // less for points
+	bool operator ()(const Point2d& a, const Point2d& b)
+	{
+		return (a.x < b.x);
+	}
+};
+
+struct LEDblob {
+	Point2d position;
+	int LEDindex;
+};
 
 class quat {
 	public:
@@ -174,13 +190,13 @@ quat slerp(quat qa, quat qb, double t) {
 	return qm;
 }
 
-int matchNewToPrediction(Point2f point, vector<Point2f> predictions, float minDistThresh) {
-	float minDist = numeric_limits<float>::infinity();
+int matchPointToPoints(Point2f point, vector<Point2f> points, float minDistThresh) {
+	float closest = numeric_limits<float>::infinity();
 	int index = -1;
-	for (int i = 0; i < predictions.size(); i++) {
-		float dist = euclideanDist(point, predictions[i]);
-		if (dist < minDist) {
-			minDist = dist;
+	for (int i = 0; i < points.size(); i++) {
+		float dist = euclideanDist(point, points[i]);
+		if (dist < closest) {
+			closest = dist;
 			if (dist < minDistThresh) {
 				index = i;
 			}
@@ -586,25 +602,57 @@ void PnPinit() {
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
 }
 
-struct point_sorter{ // less for points
-	bool operator ()(const Point2d& a, const Point2d& b)
-	{
-		return (a.x < b.x);
-	}
-};
-
-void PnPtest() {
+void PnPtest(int frame) {
 	vector<double> rvecTest, tvecTest;
 	vector<Point2d> outputTestPoints;
+	vector<Point3d> inputTest = modelPoints3D;
+	inputTest.push_back(Point3d(0,0,0));
+
 	//sort blobs by x coordinate descending
 	sort(blobPoints.begin(), blobPoints.end(), point_sorter());
+	solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
 
-	solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_EPNP);
-	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
+	//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
+	Mat rotmatTest;
+	Rodrigues(rvecTest, rotmatTest);
+	//https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToEuler/index.htm
+	double heading = atan2(-rotmatTest.at<double>(2, 0), rotmatTest.at<double>(0, 0));
+	double bank = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
+	double attitude = asin(rotmatTest.at<double>(1, 0));
 
-	for (Point2d p : outputTestPoints) {
-		circle(image, p, 1, Scalar(0, 255, 0), 2);
+	cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
+		<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;
+
+	cout << "rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
+
+	//rotmatTest = rotmatTest.inv(DECOMP_SVD);
+	Rodrigues(rotmatTest, rvecTest);
+
+	cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
+
+	projectPoints(inputTest, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
+
+	for (int i = 0; i < modelPoints3D.size(); i++) {
+		circle(image, outputTestPoints[i], 1, Scalar(0, 255, 0), 2);
+		//for all led reprojections check if a blob is there
+		int index = matchPointToPoints(outputTestPoints[i], blobPoints, 3);
+		LEDtoBlobMatching[i] = index;
 	}
+}
+
+void doPnP() {
+	//blobToPredictionMatching;
+
+	vector<Point3d> relevantLEDs;
+	vector<Point2d> relevantBlobs;
+	for (int i = 0; i < LEDtoBlobMatching.size(); i++) {
+		if (LEDtoBlobMatching[i] >= 0) { //if there is a match
+			relevantLEDs.push_back(modelPoints3D[i]);
+			relevantBlobs.push_back(blobPoints[LEDtoBlobMatching[i]]);
+		}
+	}
+
+	//solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
 }
 
 vector<double> readAllTS(string pathToFile) {
@@ -714,7 +762,7 @@ void drawTruePose(int frame) {
 	double qz = allSLERPedPoses[frame-1][3];
 	double qw = allSLERPedPoses[frame-1][4];
 
-//axis angle
+	//axis angle
 	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
 	/*double angle = 2 * acos(qw);
 	double xAxis = qx / sqrt(1 - qw * qw);
@@ -726,7 +774,7 @@ void drawTruePose(int frame) {
 	rotvec.push_back(zAxis);
 	rotvec.push_back(angle);*/
 
-//rot matrix
+	//rot matrix
 	//quaternion to rotation matrix, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToMatrix/index.htm
 	double sqw = qw*qw;
     double sqx = qx*qx;
@@ -768,8 +816,17 @@ void drawTruePose(int frame) {
 	transvec.push_back(-allSLERPedPoses[frame-1][7]);//z
 
 	projectPoints(truePoints, rotvec, transvec, cameraMatrix, distortCoeffs, trueImgPoints);
+	cout << "true rot: " << rotvec[0] << " " << rotvec[1] << " " << rotvec[2] << endl
+		<< "true trans: " << transvec[0] << " " << transvec[1] << " " << transvec[2] << endl;
+
+	double heading = atan2(-rotmat.at<double>(2, 0), rotmat.at<double>(0, 0));
+	double bank = atan2(-rotmat.at<double>(1, 2), rotmat.at<double>(1, 1));
+	double attitude = asin(rotmat.at<double>(1, 0));
+
+	cout << "true rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
+
 	for (Point2d p : trueImgPoints) {
-		circle(image, p, 1, Scalar(0, 255, 0), 2);
+		circle(image, p, 1, Scalar(255, 0, 0), 2);
 	}
 }
 
@@ -799,6 +856,7 @@ void trackBlobs() {
 
 	//sparse optical flow:
 		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
+		blobToPredictionMatching = vector<int>(blobPoints.size());
 		for (Point2f op : oldBlobPoints) {
 			circle(image, op, 2, Scalar(255, 0, 0), 2);//blue
 		}
@@ -807,8 +865,8 @@ void trackBlobs() {
 		}
 		if (blobPoints.size() > 0) { //match previous
 			for (int i = 0; i < blobPoints.size(); i++) {
-				int index = matchNewToPrediction(blobPoints[i], blobPredictions, 5);
-				//blobToBlobMatching[i] = index; //new blob in blobPoints at i is old blob in blobPredictions at blobToBlobMatching[i] (-1 if no match)
+				int index = matchPointToPoints(blobPoints[i], blobPredictions, 5);
+				blobToPredictionMatching[i] = index; //new blob in blobPoints at i is old blob in blobPredictions at blobToPredictionMatching[i] (-1 if no match)
 			}
 		}
 	}
@@ -818,7 +876,7 @@ void calculatePose() {
 	//solvePnP(detectedLEDpositions, correspondingBlobs, );
 }
 
-void matchBlobsToLED() {
+void givenLEDmatchBlobs(vector<Point2d> pointsA, vector<Point2d> pointsB) {
 
 	//sort modelPoints3D and imagePoints2D to match
 	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
@@ -921,6 +979,7 @@ int main()
 	allTruePoses = readAllPoses(pathToImgSequence + "Camera2Targret.txt");
 	allSLERPedPoses = interpolateAllTruePosesAtFrameTS();
 	modelPoints3D = fillModelPoints();
+	LEDtoBlobMatching = vector<int>(modelPoints3D.size());
 
 	//createTrackbars();
 
@@ -1004,13 +1063,13 @@ int main()
 
 
 		greyLEDdetect();
-		PnPtest();
-		//trackBlobs();
+		trackBlobs();
+		PnPtest(frameCounter);
 
 		//calculatePose();
 		//solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		//drawTruePose(frameCounter);
+		drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
