@@ -79,10 +79,12 @@ Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
 int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
 
-//new blob in blobPoints at i corresponds to old blob in blobPredictions at blobToPredictionMatching[i] (-1 if no match)
-vector<int> blobToPredictionMatching;
-//LED in modelPonts3D at i corresponds to detected blob in blobPoints at LEDtoBlobMatching[i] (-1 if no match)
-vector<int> LEDtoBlobMatching;
+// oldBlobPoints -> newBlobPoints
+vector<int> oldToNewBlobMatching;
+// LED3D -> newBlobPoints
+vector<int> LEDtoNewBlobMatching;
+// LED3D -> oldBlobPoints
+vector<int> LEDtoOldBlobMatching;
 
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
@@ -106,7 +108,7 @@ vector <int> inliersA;
 vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
-vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
+vector<Point2f> newBlobPoints, oldBlobPoints, predictedBlobPoints;
 vector<LEDblob> oldLEDblobs, newLEDblobs;
 
 class quat {
@@ -359,9 +361,9 @@ void fitBandBlob()
 		// DrawMatchesFlags::DRAW_RICH_KEYPOINTS flag ensures the size of the circle corresponds to the size of blob
 		drawKeypoints(backprojImage, keypoints, backprojImage, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 		imshow("Backprojection", backprojImage);
-		KeyPoint::convert(keypoints, blobPoints);
-		if (blobPoints.size() > 4) {
-			RotatedRect rr = fitEllipse(blobPoints);
+		KeyPoint::convert(keypoints, newBlobPoints);
+		if (newBlobPoints.size() > 4) {
+			RotatedRect rr = fitEllipse(newBlobPoints);
 			ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
 		}
 	}
@@ -582,7 +584,7 @@ void greyLEDdetect(){
 	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
 	drawKeypoints(image, keypoints, image, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-	KeyPoint::convert(keypoints, blobPoints);
+	KeyPoint::convert(keypoints, newBlobPoints);
 	//todo: sort out blobs by colour
 }
 
@@ -610,25 +612,23 @@ void PnPinit() {
 void PnPtest(int frame) {
 	vector<double> rvecTest, tvecTest;
 	vector<Point2d> outputTestPoints;
-	vector<Point3d> inputTest = modelPoints3D;
-	inputTest.push_back(Point3d(0,0,0));
 
 	if (frame <= startFrame + 1) {
 		//sort blobs by x coordinate descending
-		sort(blobPoints.begin(), blobPoints.end(), point_sorter());
-		solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+		sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
+		solvePnP(modelPoints3D, newBlobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
 	}
 	else {
-		vector<Point3d> relevantLEDs;
-		vector<Point2d> relevantBlobs;
-		for (int i = 0; i < LEDtoBlobMatching.size(); i++) {
-			if (LEDtoBlobMatching[i] >= 0) { //if there is a match
+		vector<Point3d> relevantLEDs; //those 3DLEDs that have a known 2D blob position
+		vector<Point2d> correspondingBlobs;//the corresponding blob positions
+		for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
+			if (LEDtoNewBlobMatching[i] >= 0) { //push all 3d led points that have a match
 				relevantLEDs.push_back(modelPoints3D[i]);
-				relevantBlobs.push_back(blobPoints[blobToPredictionMatching[LEDtoBlobMatching[i]]]);
+				correspondingBlobs.push_back(newBlobPoints[LEDtoNewBlobMatching[i]]);
 			}
 		}
 
-		solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
 	}
 
 	//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
@@ -649,21 +649,16 @@ void PnPtest(int frame) {
 
 	cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
 
-	projectPoints(inputTest, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
+	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
 
 	for (int i = 0; i < modelPoints3D.size(); i++) {
-		circle(image, outputTestPoints[i], 1, Scalar(0, 255, 0), 2);
-		//for all led reprojections check if a blob is there
-		int index = matchPointToPoints(outputTestPoints[i], blobPoints, 3);
-		LEDtoBlobMatching[i] = index;
+		circle(image, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
 	}
-}
 
-void doPnP() {
-	vector<double> rotationVector, translationVector;
-	//relevantLEDs = those LEDs that have a successful match from old blob to new
-	//relevantBlobs = those that have an LED id
-	//solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rotationVector, translationVector, false, SOLVEPNP_ITERATIVE);
+	//for all reprojected LEDs check if a blob is detected there
+	for (int i = 0; i < outputTestPoints.size(); i++) {
+		LEDtoOldBlobMatching[i] = matchPointToPoints(outputTestPoints[i], newBlobPoints, 3);
+	}
 }
 
 vector<double> readAllTS(string pathToFile) {
@@ -841,7 +836,7 @@ void drawTruePose(int frame) {
 	}
 }
 
-void trackBlobs() {
+void trackBlobs() { //used to match new blobs to old blobs
 	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
 
 	//dense optical flow:
@@ -866,22 +861,24 @@ void trackBlobs() {
 
 
 	//sparse optical flow:
-		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, blobPredictions, status, err, Size(15, 15), 2, term);
-		blobToPredictionMatching = vector<int>(blobPoints.size());
-		for (Point2f op : oldBlobPoints) {
-			circle(image, op, 2, Scalar(255, 0, 0), 2);//blue
+		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(15, 15), 2, term);
+		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
+		for (int i = 0; i < oldBlobPoints.size(); i++) {
+			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
 		}
-		for (Point2f pp : blobPredictions) {
-			circle(image, pp, 2, Scalar(0, 255, 255), 2);//yellow
-		}
-		if (blobPoints.size() > 0) { //match previous
-			for (int i = 0; i < blobPoints.size(); i++) {
-				int index = matchPointToPoints(blobPoints[i], blobPredictions, 5);
+		for (int i = 0; i < predictedBlobPoints.size(); i++) {
+			circle(image, predictedBlobPoints[i], 2, Scalar(0, 255, 255), 2);// yellow: predicted blobs
 
-				blobToPredictionMatching[i] = index; //new blob in blobPoints at i is old blob in blobPredictions at blobToPredictionMatching[i] (-1 if no match)
-				if (index >= 0) {
-					newLEDblobs.push_back(LEDblob(blobPoints[i], index));
-				}
+			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 5);
+		}
+
+		for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
+			int index = LEDtoOldBlobMatching[i];
+			if (index >= 0) {
+				LEDtoNewBlobMatching[i] = oldToNewBlobMatching[LEDtoOldBlobMatching[i]];
+			}
+			else {
+				LEDtoNewBlobMatching[i] = -1;
 			}
 		}
 	}
@@ -994,7 +991,8 @@ int main()
 	allTruePoses = readAllPoses(pathToImgSequence + "Camera2Targret.txt");
 	allSLERPedPoses = interpolateAllTruePosesAtFrameTS();
 	modelPoints3D = fillModelPoints();
-	LEDtoBlobMatching = vector<int>(modelPoints3D.size());
+	LEDtoNewBlobMatching = vector<int>(modelPoints3D.size());
+	LEDtoOldBlobMatching = LEDtoNewBlobMatching;
 
 	//createTrackbars();
 
@@ -1084,11 +1082,11 @@ int main()
 		//calculatePose();
 		//solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		drawTruePose(frameCounter);
+		//drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
-		oldBlobPoints = blobPoints;
+		oldBlobPoints = newBlobPoints;
 		oldLEDblobs = newLEDblobs;
 
 		//resize(imgGrey, imgGrey, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
