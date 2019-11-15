@@ -8,6 +8,22 @@
 using namespace std;
 using namespace cv;
 
+struct point_sorter { // less for points
+	bool operator ()(const Point2d& a, const Point2d& b)
+	{
+		return (a.x < b.x);
+	}
+};
+
+struct LEDblob {
+	Point2d position;
+	int id;
+	LEDblob(Point2d pos, int index) {
+		position = pos;
+		id = index;
+	}
+};
+
 //ground truth
 string pathToImgSequence("video_1.003_darkblue_new/");
 int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
@@ -91,18 +107,7 @@ vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> blobPoints, oldBlobPoints, blobPredictions;
-
-struct point_sorter { // less for points
-	bool operator ()(const Point2d& a, const Point2d& b)
-	{
-		return (a.x < b.x);
-	}
-};
-
-struct LEDblob {
-	Point2d position;
-	int LEDindex;
-};
+vector<LEDblob> oldLEDblobs, newLEDblobs;
 
 class quat {
 	public:
@@ -608,9 +613,23 @@ void PnPtest(int frame) {
 	vector<Point3d> inputTest = modelPoints3D;
 	inputTest.push_back(Point3d(0,0,0));
 
-	//sort blobs by x coordinate descending
-	sort(blobPoints.begin(), blobPoints.end(), point_sorter());
-	solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+	if (frame <= startFrame + 1) {
+		//sort blobs by x coordinate descending
+		sort(blobPoints.begin(), blobPoints.end(), point_sorter());
+		solvePnP(modelPoints3D, blobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+	}
+	else {
+		vector<Point3d> relevantLEDs;
+		vector<Point2d> relevantBlobs;
+		for (int i = 0; i < LEDtoBlobMatching.size(); i++) {
+			if (LEDtoBlobMatching[i] >= 0) { //if there is a match
+				relevantLEDs.push_back(modelPoints3D[i]);
+				relevantBlobs.push_back(blobPoints[blobToPredictionMatching[LEDtoBlobMatching[i]]]);
+			}
+		}
+
+		solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+	}
 
 	//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
 	Mat rotmatTest;
@@ -641,18 +660,10 @@ void PnPtest(int frame) {
 }
 
 void doPnP() {
-	//blobToPredictionMatching;
-
-	vector<Point3d> relevantLEDs;
-	vector<Point2d> relevantBlobs;
-	for (int i = 0; i < LEDtoBlobMatching.size(); i++) {
-		if (LEDtoBlobMatching[i] >= 0) { //if there is a match
-			relevantLEDs.push_back(modelPoints3D[i]);
-			relevantBlobs.push_back(blobPoints[LEDtoBlobMatching[i]]);
-		}
-	}
-
-	//solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+	vector<double> rotationVector, translationVector;
+	//relevantLEDs = those LEDs that have a successful match from old blob to new
+	//relevantBlobs = those that have an LED id
+	//solvePnP(relevantLEDs, relevantBlobs, cameraMatrix, distortCoeffs, rotationVector, translationVector, false, SOLVEPNP_ITERATIVE);
 }
 
 vector<double> readAllTS(string pathToFile) {
@@ -866,7 +877,11 @@ void trackBlobs() {
 		if (blobPoints.size() > 0) { //match previous
 			for (int i = 0; i < blobPoints.size(); i++) {
 				int index = matchPointToPoints(blobPoints[i], blobPredictions, 5);
+
 				blobToPredictionMatching[i] = index; //new blob in blobPoints at i is old blob in blobPredictions at blobToPredictionMatching[i] (-1 if no match)
+				if (index >= 0) {
+					newLEDblobs.push_back(LEDblob(blobPoints[i], index));
+				}
 			}
 		}
 	}
@@ -1074,6 +1089,7 @@ int main()
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
 		oldBlobPoints = blobPoints;
+		oldLEDblobs = newLEDblobs;
 
 		//resize(imgGrey, imgGrey, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		//resize(image, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
