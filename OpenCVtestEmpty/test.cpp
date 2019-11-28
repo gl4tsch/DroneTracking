@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <string>
 #include "test.h"
 
 using namespace std;
@@ -15,27 +16,19 @@ struct point_sorter { // less for points
 	}
 };
 
-struct LEDblob {
-	Point2d position;
-	int id;
-	LEDblob(Point2d pos, int index) {
-		position = pos;
-		id = index;
-	}
-};
-
 //ground truth
 string pathToImgSequence("video_1.003_darkblue_new/");
-int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
+int startFrame = 173; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
 
-int imgSizeX = 1280;//640;
-int imgSizeY = 1024;//360;
+int imgSizeX = 1280;
+int imgSizeY = 1024;
 int imgResizeX = 640;
 int imgResizeY = 360;
 Mat image;
+Mat imgDraw;
 Mat imgHLS;
 Mat imgThresholded;
 int frameCounter = startFrame;
@@ -68,9 +61,11 @@ int hsize = 16;
 float hranges[] = { 0,180 };
 const float* phranges = hranges;
 Mat frame, hls, hue, hue2, mask, mask2, hist, hist2, histimg = Mat::zeros(200, 320, CV_8UC3), histimg2 = Mat::zeros(200, 320, CV_8UC3), backproj, backproj2, backprojImage, backprojImage2, cannyOut, cannyOut2;
+Mat bothbackproj;
 bool paused = false;
 bool backprojMode = true;
 bool showHist = true;
+bool recordMode = false;
 RotatedRect trackBox, trackBox2;
 int thresh = 0;
 
@@ -78,6 +73,7 @@ int thresh = 0;
 Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
 int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
+int maxGrey = 255;
 
 // oldBlobPoints -> newBlobPoints
 vector<int> oldToNewBlobMatching;
@@ -109,7 +105,6 @@ vector<uchar> status;
 vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> newBlobPoints, oldBlobPoints, predictedBlobPoints;
-vector<LEDblob> oldLEDblobs, newLEDblobs;
 
 class quat {
 	public:
@@ -217,12 +212,14 @@ void detectHLSthresholds() {
 	inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
 	//inRange(imgHLS, Scalar(87, 230, 255), Scalar(94, 255, 255), imgThresholded); //Threshold for party_-2_l_l.mp4 green
 	//inRange(imgHLS, Scalar(71, 169, 255), Scalar(98, 255, 255), imgThresholded); //Threshold for auto-darker3.mp4 blue
+
 	//morphological operations
-	morphClose(imgThresholded);
-	morphOpen(imgThresholded);
+	//morphClose(imgThresholded);
+	//morphOpen(imgThresholded);
+
 	//find contours of filtered image using openCV findContours function
-	findContours(imgThresholded, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
-	drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
+	//findContours(imgThresholded, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
+	//drawContours(image, contours, -1, Scalar(255, 0, 255), 2, 8, hierarchy);
 
 	////Calculate the moments of the thresholded image
 	//Moments oMoments = moments(imgThresholded);
@@ -319,6 +316,8 @@ Point2d calculateMedian() {
 
 void fitBandContours(Rect roi, Rect roi2)
 {
+	bothbackproj = backprojImage + backprojImage2;
+
 	Canny(backproj, cannyOut, 200, 200 * 2);
 	findContours(cannyOut, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE); //, roi.tl());
 	Canny(backproj2, cannyOut2, 200, 200 * 2);
@@ -328,16 +327,18 @@ void fitBandContours(Rect roi, Rect roi2)
 	for (vector<Point> v : contours) {
 		for (Point p : v) {
 			contourPoints.push_back(p);
+			circle(bothbackproj, p, 0, Scalar(0,0,255),2);
 		}
 	}
 	for (vector<Point> v : contours2) {
 		for (Point p : v) {
 			contourPoints.push_back(p);
+			circle(bothbackproj, p, 0, Scalar(0, 0, 255), 2);
 		}
 	}
 	if (contourPoints.size() > 4) {
 		RotatedRect rr = fitEllipse(contourPoints);
-		ellipse(image, rr, Scalar(0, 255, 0), 3, LINE_AA);
+		ellipse(imgDraw, rr, Scalar(0, 255, 0), 3, LINE_AA);
 		/*pointBuffer[frameCounter % bufferSize] = rr.center;
 		if (frameCounter > bufferSize) {
 			Point2d p = calculateMedian();
@@ -345,10 +346,11 @@ void fitBandContours(Rect roi, Rect roi2)
 		}*/
 
 	}
-	drawContours(backprojImage, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
-	drawContours(backprojImage2, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
+	//drawContours(bothbackproj, contours, -1, Scalar(255, 0, 255), 1, 8, hierarchy);
+	//drawContours(bothbackproj, contours2, -1, Scalar(255, 0, 255), 1, 8, hierarchy2);
 	imshow("Backprojection", backprojImage);
 	imshow("Backprojection2", backprojImage2);
+	imshow("Both Backprojections", bothbackproj);
 }
 
 void fitBandBlob()
@@ -456,9 +458,9 @@ void trackCamshift() {
 				cvtColor(backproj, backprojImage, COLOR_GRAY2BGR);
 
 				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
-					//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY));
-					drawRotatedRect(trackBox, backprojImage);
-					rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
+					//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY));
+					//drawRotatedRect(trackBox, backprojImage);
+					//rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
 				}
 				imshow("Backprojection", backprojImage);
@@ -511,16 +513,16 @@ void trackCamshift() {
 				cvtColor(backproj2, backprojImage2, COLOR_GRAY2BGR);
 
 				if (trackBox2.size.height > 0 && trackBox2.size.width > 0) {
-					//fitBand(cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
-					drawRotatedRect(trackBox2, backprojImage2);
-					rectangle(backprojImage2, trackBox2.boundingRect(), Scalar(0, 0, 255));
+					//fitBand(cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
+					//drawRotatedRect(trackBox2, backprojImage2);
+					//rectangle(backprojImage2, trackBox2.boundingRect(), Scalar(0, 0, 255));
 					//ellipse(image, trackBox2, Scalar(0, 255, 0), 3, LINE_AA);
 				}
 				imshow("Backprojection2", backprojImage2);
 			}
 		}
 		if (trackObject1 && trackObject2) {
-			//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
+			//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
 		}
 	}
 	else if (trackObject1 < 0 || trackObject2 < 0)
@@ -537,7 +539,7 @@ void trackCamshift() {
 void LEDdetect()
 {
 	//compute mask based on camshift track rotated rect
-	Mat blobMask = Mat::zeros(imgSizeY, imgSizeX, CV_8UC3);
+	Mat blobMask = Mat::zeros(imgResizeY, imgResizeX, CV_8UC3);
 	Point2f vertices2f[4];
 	Point vertices[4];
 	trackBox.points(vertices2f);
@@ -580,10 +582,11 @@ void LEDdetect()
 
 void greyLEDdetect(){
 	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
-	threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
+	//threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
+	inRange(imgGrey, minGrey, maxGrey, imgBinary); //Threshold the image
 	imshow("binary", imgBinary);
 	detector->detect(imgGrey, keypoints);
-	drawKeypoints(image, keypoints, image, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, newBlobPoints);
 	//todo: sort out blobs by colour
 }
@@ -650,14 +653,23 @@ void PnPtest(int frame) {
 	cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
 
 	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
-
-	for (int i = 0; i < modelPoints3D.size(); i++) {
+	
+	int reprojectioncounter = 0;
+	for (int i = 0; i < outputTestPoints.size(); i++) {
 		circle(image, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+		//for all reprojected LEDs check if a blob is detected there
+		int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 3);
+		LEDtoOldBlobMatching[i] = index;
+		if (index >= 0) {
+			reprojectioncounter++;
+		}
 	}
 
-	//for all reprojected LEDs check if a blob is detected there
-	for (int i = 0; i < outputTestPoints.size(); i++) {
-		LEDtoOldBlobMatching[i] = matchPointToPoints(outputTestPoints[i], newBlobPoints, 3);
+	if (reprojectioncounter < 4){
+		//bad pose. reinitiate detection phase
+		//relevantLEDs = get 4 random LEDs from modelPoints3D
+		//solveP3P with all possible matches in newBlobPoints
+		//reproject each one and count LED to blob matches
 	}
 }
 
@@ -969,11 +981,11 @@ void kalman() {
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
-	//VideoCapture cap("party_-2_l_l.mp4"); //video file
+	VideoCapture cap("party_-2_l_l.mp4"); //video file
 	//VideoCapture cap("auto-darker3.mp4");
 	//VideoCapture cap("night-normal.mp4");
 	//VideoCapture cap("VID_20190920_155534.mp4");
-	VideoCapture cap(pathToImgSequence + "img00000.png");
+	//VideoCapture cap(pathToImgSequence + "img00000.png");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
@@ -994,17 +1006,17 @@ int main()
 	LEDtoNewBlobMatching = vector<int>(modelPoints3D.size());
 	LEDtoOldBlobMatching = LEDtoNewBlobMatching;
 
-	//createTrackbars();
+	createTrackbars();
 
 	//camshift temp
 	namedWindow("Original", 1);
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
 	namedWindow("Backprojection2", 1);
-	createTrackbar("Lmin1", "Backprojection", &lmin1, 255, 0);
+	/*createTrackbar("Lmin1", "Backprojection", &lmin1, 255, 0);
 	createTrackbar("Lmax1", "Backprojection", &lmax1, 255, 0);
 	createTrackbar("Lmin2", "Backprojection2", &lmin2, 255, 0);
-	createTrackbar("Lmax2", "Backprojection2", &lmax2, 255, 0);
+	createTrackbar("Lmax2", "Backprojection2", &lmax2, 255, 0);*/
 
 
 	//blob
@@ -1013,7 +1025,7 @@ int main()
 	
 	// Change thresholds
 	params.minThreshold = minGrey; //240 for handy footage
-	params.maxThreshold = 255;
+	params.maxThreshold = maxGrey;
 
 	// Filter by Area.
 	params.filterByArea = false; //true for handy
@@ -1046,11 +1058,14 @@ int main()
 	//PnPapproxInit();
 	PnPinit();
 
+	paused = true;
+	bool frameRead = cap.read(frame); // read a new frame from video (frame if resize, image if not)
+
 	for(;;)
 	{
 		if (!paused) {
 			t = (double)getTickCount(); //start timer
-			bool frameRead = cap.read(image); // read a new frame from video (frame | image)
+			bool frameRead = cap.read(frame); // read a new frame from video (frame if resize, image if not)
 			if (!frameRead) //if fail, break loop
 			{
 				cout << "Cannot read a frame from video stream" << endl;
@@ -1064,20 +1079,21 @@ int main()
 				cout << "Video loop" << endl;
 			}
 		}
-		//resize(frame, image, Size(imgSizeX, imgSizeY), 0, 0, INTER_CUBIC); //resize to 640 by 360
+		resize(frame, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
+		image.copyTo(imgDraw);
 
-		//detectHLSthresholds(); //show regions of specified HLS values
+		detectHLSthresholds(); //show regions of specified HLS values
 		//trackCamshift();
 		//LEDdetect();
 		//fitBandBlob();
-		/*if (!backproj.empty() && !backproj2.empty()) {
-			fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgSizeX, imgSizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgSizeX, imgSizeY));
-		}*/
+		if (!backproj.empty() && !backproj2.empty()) {
+			//fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
+		}
 
 
 		greyLEDdetect();
-		trackBlobs();
-		PnPtest(frameCounter);
+		//trackBlobs();
+		//PnPtest(frameCounter);
 
 		//calculatePose();
 		//solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
@@ -1087,17 +1103,26 @@ int main()
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
 		oldBlobPoints = newBlobPoints;
-		oldLEDblobs = newLEDblobs;
 
 		//resize(imgGrey, imgGrey, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		//resize(image, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
+		namedWindow("Draw", 1);
+		createTrackbar("minGrey", "Draw", &minGrey, 255, 0);
+		createTrackbar("maxGrey", "Draw", &maxGrey, 255, 0);
+		imshow("Draw", imgDraw);
 
-		if (waitKey(0) == 32) //frame by frame with 'space'
-		{
-			cout << "space key is pressed by user" << endl;
+		if (recordMode) {
+			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
+			imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
+			imwrite("recorder/backproj" + to_string(frameCounter) + ".png", bothbackproj);
 		}
+
+		//if (waitKey(0) == 32) //frame by frame with 'space'
+		//{
+		//	cout << "space key is pressed by user" << endl;
+		//}
 
 		char c = (char)waitKey(10);
 		switch (c)
@@ -1118,6 +1143,15 @@ int main()
 			break;
 		case 'p':
 			paused = !paused;
+			break;
+		case 'r':
+			recordMode = !recordMode;
+			break;
+		case 's':
+			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
+			//imwrite("recorder/gray" + to_string(frameCounter) + ".png", imgGrey);
+			//imwrite("recorder/bin" + to_string(frameCounter) + ".png", imgBinary);
+			imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
 			break;
 		default:
 			;

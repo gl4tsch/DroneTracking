@@ -199,3 +199,4 @@ FakesAssemblies/
 *.mp4
 /OpenCVtestEmpty/video_0.006_darkblue_new/*
 /OpenCVtestEmpty/video_1.003_darkblue_new/*
+/OpenCVtestEmpty/recorder/*
