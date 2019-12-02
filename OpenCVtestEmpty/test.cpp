@@ -17,16 +17,16 @@ struct point_sorter { // less for points
 };
 
 //ground truth
-string pathToImgSequence("video_1.003_darkblue_new/");
-int startFrame = 173; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
+string pathToImgSequence("video_1.999_green_new/");
+int startFrame = 75; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
 
 int imgSizeX = 1280;
 int imgSizeY = 1024;
-int imgResizeX = 640;
-int imgResizeY = 360;
+int imgResizeX = 640;//640;
+int imgResizeY = 512;//360;
 Mat image;
 Mat imgDraw;
 Mat imgHLS;
@@ -52,9 +52,9 @@ Rect selection;
 Point origin;
 int trackObject1 = 0;
 int trackObject2 = 0;
-int lmin1 = 220;
+int lmin1 = 220;//220;
 int lmax1 = 255;
-int lmin2 = 220;
+int lmin2 = 220;//220;
 int lmax2 = 255;
 Rect trackWindow, trackWindow2;
 int hsize = 16;
@@ -85,7 +85,7 @@ vector<int> LEDtoOldBlobMatching;
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
 
-Mat imgGrey, imgGreyOld, imgBinary;
+Mat imgGrey, imgGreyOld, imgBinary, bgr;
 
 //PnP
 vector <Point2d> imagePoints2D;
@@ -144,14 +144,14 @@ void createTrackbars() {
 
 void morphOpen(Mat &thresh) {
 	//morphological opening (remove small objects from the foreground)
-	erode(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(3, 3)));
-	dilate(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(3, 3)));
+	erode(thresh, thresh, getStructuringElement(MORPH_RECT, Size(3, 3)));
+	dilate(thresh, thresh, getStructuringElement(MORPH_RECT, Size(3, 3)));
 }
 
 void morphClose(Mat &thresh) {
 	//morphological closing (fill small holes in the foreground)
-	dilate(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
-	erode(thresh, thresh, getStructuringElement(MORPH_ELLIPSE, Size(5, 5)));
+	dilate(thresh, thresh, getStructuringElement(MORPH_RECT, Size(3, 3)));
+	erode(thresh, thresh, getStructuringElement(MORPH_RECT, Size(3, 3)));
 }
 
 float euclideanDist(Point2f& p, Point2f& q) {
@@ -192,14 +192,14 @@ quat slerp(quat qa, quat qb, double t) {
 	return qm;
 }
 
-int matchPointToPoints(Point2f point, vector<Point2f> points, float minDistThresh) {
+int matchPointToPoints(Point2f point, vector<Point2f> points, float maxDistThresh) {
 	float closest = numeric_limits<float>::infinity();
 	int index = -1;
 	for (int i = 0; i < points.size(); i++) {
 		float dist = euclideanDist(point, points[i]);
 		if (dist < closest) {
 			closest = dist;
-			if (dist < minDistThresh) {
+			if (dist < maxDistThresh) {
 				index = i;
 			}
 		}
@@ -279,12 +279,12 @@ static void onMouse(int event, int x, int y, int, void*)
 	}
 }
 
-void drawRotatedRect(RotatedRect rr, Mat img)
+void drawRotatedRect(RotatedRect rr, Mat img, Scalar color)
 {
 	Point2f vertices[4];
 	rr.points(vertices);
 	for (int i = 0; i < 4; i++)
-		line(img, vertices[i], vertices[(i + 1) % 4], Scalar(0, 255, 0));
+		line(img, vertices[i], vertices[(i + 1) % 4], color, 2);
 }
 
 Rect cutRectToImgBounds(Rect r, int imgWidth, int imgHeight)
@@ -459,9 +459,9 @@ void trackCamshift() {
 
 				if (trackBox.size.height > 0 && trackBox.size.width > 0) {
 					//fitBand(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY));
-					//drawRotatedRect(trackBox, backprojImage);
+					drawRotatedRect(trackBox, imgDraw, Scalar(0,255,255));
 					//rectangle(backprojImage, trackBox.boundingRect(), Scalar(0, 0, 255));
-					//ellipse(image, trackBox, Scalar(0, 0, 255), 3, LINE_AA);
+					//ellipse(imgDraw, trackBox, Scalar(255, 0, 0), 2, LINE_AA);
 				}
 				imshow("Backprojection", backprojImage);
 			}
@@ -514,9 +514,9 @@ void trackCamshift() {
 
 				if (trackBox2.size.height > 0 && trackBox2.size.width > 0) {
 					//fitBand(cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
-					//drawRotatedRect(trackBox2, backprojImage2);
+					//drawRotatedRect(trackBox2, imgDraw, Scalar(0,255,255));
 					//rectangle(backprojImage2, trackBox2.boundingRect(), Scalar(0, 0, 255));
-					//ellipse(image, trackBox2, Scalar(0, 255, 0), 3, LINE_AA);
+					ellipse(imgDraw, trackBox2, Scalar(255, 0, 0), 2, LINE_AA);
 				}
 				imshow("Backprojection2", backprojImage2);
 			}
@@ -584,9 +584,10 @@ void greyLEDdetect(){
 	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
 	//threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
 	inRange(imgGrey, minGrey, maxGrey, imgBinary); //Threshold the image
-	imshow("binary", imgBinary);
-	detector->detect(imgGrey, keypoints);
-	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(0, 0, 255), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+	//morphOpen(imgBinary);
+	//morphClose(imgBinary);
+	detector->detect(imgBinary, keypoints);
+	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, newBlobPoints);
 	//todo: sort out blobs by colour
 }
@@ -630,8 +631,7 @@ void PnPtest(int frame) {
 				correspondingBlobs.push_back(newBlobPoints[LEDtoNewBlobMatching[i]]);
 			}
 		}
-
-		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+ 		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
 	}
 
 	//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
@@ -656,15 +656,17 @@ void PnPtest(int frame) {
 	
 	int reprojectioncounter = 0;
 	for (int i = 0; i < outputTestPoints.size(); i++) {
-		circle(image, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+		circle(imgDraw, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+		putText(imgDraw, to_string(i), outputTestPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
 		//for all reprojected LEDs check if a blob is detected there
-		int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 3);
+		int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 5);
 		LEDtoOldBlobMatching[i] = index;
 		if (index >= 0) {
 			reprojectioncounter++;
 		}
 	}
-
+	imshow("Draw", imgDraw);
+	waitKey(1);
 	if (reprojectioncounter < 4){
 		//bad pose. reinitiate detection phase
 		//relevantLEDs = get 4 random LEDs from modelPoints3D
@@ -733,7 +735,7 @@ vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 		for (int ii = bookMark; ii < allTruePoses.size(); ii++) { //loop through all prerecorded poses until timestamp is bigger than current frame i
 			double poseTS = allTruePoses[ii][0];
 			if (poseTS > frameTS) {
-				vector<double> poseLeft = allTruePoses[ii - 1];
+				vector<double> poseLeft = allTruePoses[max(ii - 1, 0)];
 				vector<double> poseRight = allTruePoses[ii];
 
 				//calc pose at frameTS
@@ -852,47 +854,55 @@ void trackBlobs() { //used to match new blobs to old blobs
 	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
 
 	//dense optical flow:
-		//Mat flow(imgGreyOld.size(), CV_32FC2);
-		//calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
-		//// visualization
-		//Mat flow_parts[2];
-		//split(flow, flow_parts);
-		//Mat magnitude, angle, magn_norm;
-		//cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
-		//normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
-		//angle *= ((1.f / 360.f) * (180.f / 255.f));
-		////build hsv image
-		//Mat _hsv[3], hsv, hsv8, bgr;
-		//_hsv[0] = angle;
-		//_hsv[1] = Mat::ones(angle.size(), CV_32F);
-		//_hsv[2] = magn_norm;
-		//merge(_hsv, 3, hsv);
-		//hsv.convertTo(hsv8, CV_8U, 255.0);
-		//cvtColor(hsv8, bgr, COLOR_HSV2BGR);
-		//imshow("frame2", bgr);
+		Mat flow(imgGreyOld.size(), CV_32FC2);
+		calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
+		// visualization
+		Mat flow_parts[2];
+		split(flow, flow_parts);
+		Mat magnitude, angle, magn_norm;
+		cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
+		normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
+		angle *= ((1.f / 360.f) * (180.f / 255.f));
+		//build hsv image
+		Mat _hsv[3], hsv, hsv8;
+		_hsv[0] = angle;
+		_hsv[1] = Mat::ones(angle.size(), CV_32F);
+		_hsv[2] = magn_norm;
+		merge(_hsv, 3, hsv);
+		hsv.convertTo(hsv8, CV_8U, 255.0);
+		cvtColor(hsv8, bgr, COLOR_HSV2BGR);
+		imshow("frame2", bgr);
 
 
 	//sparse optical flow:
-		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(15, 15), 2, term);
+		/*calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(15, 15), 3, term);
 		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
 		for (int i = 0; i < oldBlobPoints.size(); i++) {
-			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
+			circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
+			//putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
 		}
 		for (int i = 0; i < predictedBlobPoints.size(); i++) {
 			circle(image, predictedBlobPoints[i], 2, Scalar(0, 255, 255), 2);// yellow: predicted blobs
 
-			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 5);
+			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
+			//putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 		}
-
+		imshow("Original", image);
+		waitKey(1);
 		for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
 			int index = LEDtoOldBlobMatching[i];
 			if (index >= 0) {
 				LEDtoNewBlobMatching[i] = oldToNewBlobMatching[LEDtoOldBlobMatching[i]];
+				if (LEDtoNewBlobMatching[i] >= 0) {
+					putText(image, to_string(i), newBlobPoints[LEDtoNewBlobMatching[i]], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
+				}
 			}
 			else {
 				LEDtoNewBlobMatching[i] = -1;
 			}
 		}
+		imshow("Original", image);
+		waitKey(1);*/
 	}
 }
 
@@ -981,11 +991,11 @@ void kalman() {
 int main()
 {
 	//VideoCapture cap(0); //capture the video from web cam
-	VideoCapture cap("party_-2_l_l.mp4"); //video file
+	//VideoCapture cap("party_-2_l_l.mp4"); //video file
 	//VideoCapture cap("auto-darker3.mp4");
 	//VideoCapture cap("night-normal.mp4");
 	//VideoCapture cap("VID_20190920_155534.mp4");
-	//VideoCapture cap(pathToImgSequence + "img00000.png");
+	VideoCapture cap(pathToImgSequence + "img00000.png");
 
 	if (!cap.isOpened())  // if not success, exit program
 	{
@@ -1013,9 +1023,9 @@ int main()
 	setMouseCallback("Original", onMouse, 0);
 	namedWindow("Backprojection", 1);
 	namedWindow("Backprojection2", 1);
-	/*createTrackbar("Lmin1", "Backprojection", &lmin1, 255, 0);
+	createTrackbar("Lmin1", "Backprojection", &lmin1, 255, 0);
 	createTrackbar("Lmax1", "Backprojection", &lmax1, 255, 0);
-	createTrackbar("Lmin2", "Backprojection2", &lmin2, 255, 0);
+	/*createTrackbar("Lmin2", "Backprojection2", &lmin2, 255, 0);
 	createTrackbar("Lmax2", "Backprojection2", &lmax2, 255, 0);*/
 
 
@@ -1082,7 +1092,7 @@ int main()
 		resize(frame, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		image.copyTo(imgDraw);
 
-		detectHLSthresholds(); //show regions of specified HLS values
+		//detectHLSthresholds(); //show regions of specified HLS values
 		//trackCamshift();
 		//LEDdetect();
 		//fitBandBlob();
@@ -1092,7 +1102,7 @@ int main()
 
 
 		greyLEDdetect();
-		//trackBlobs();
+		trackBlobs();
 		//PnPtest(frameCounter);
 
 		//calculatePose();
@@ -1109,14 +1119,18 @@ int main()
 		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 		namedWindow("Draw", 1);
-		createTrackbar("minGrey", "Draw", &minGrey, 255, 0);
-		createTrackbar("maxGrey", "Draw", &maxGrey, 255, 0);
+		namedWindow("Binary", 1);
+		createTrackbar("minGrey", "Binary", &minGrey, 255, 0);
+		createTrackbar("maxGrey", "Binary", &maxGrey, 255, 0);
 		imshow("Draw", imgDraw);
+		//imshow("Binary", imgBinary);
+
 
 		if (recordMode) {
 			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
-			imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
-			imwrite("recorder/backproj" + to_string(frameCounter) + ".png", bothbackproj);
+			imwrite("recorder/redbackproj" + to_string(frameCounter) + ".png", backprojImage);
+			//imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
+			//imwrite("recorder/backproj" + to_string(frameCounter) + ".png", bothbackproj);
 		}
 
 		//if (waitKey(0) == 32) //frame by frame with 'space'
@@ -1149,9 +1163,13 @@ int main()
 			break;
 		case 's':
 			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
+			//imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
 			//imwrite("recorder/gray" + to_string(frameCounter) + ".png", imgGrey);
 			//imwrite("recorder/bin" + to_string(frameCounter) + ".png", imgBinary);
-			imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
+			//imwrite("recorder/backproj1" + to_string(frameCounter) + ".png", backprojImage);
+			//imwrite("recorder/backproj2" + to_string(frameCounter) + ".png", backprojImage2);
+			//imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
+			imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
 			break;
 		default:
 			;
