@@ -17,16 +17,17 @@ struct point_sorter { // less for points
 };
 
 //ground truth
-string pathToImgSequence("video_1.999_green_new/");
-int startFrame = 75; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
+string pathToImgSequence("video_1.003_darkblue_new/");
+int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
 
 int imgSizeX = 1280;
 int imgSizeY = 1024;
-int imgResizeX = 640;//640;
-int imgResizeY = 512;//360;
+float resScale = 1;
+int imgResizeX;
+int imgResizeY;
 Mat image;
 Mat imgDraw;
 Mat imgHLS;
@@ -72,7 +73,7 @@ int thresh = 0;
 //blob detect
 Ptr<SimpleBlobDetector> detector;
 vector<KeyPoint> keypoints;
-int minGrey = 200; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
+int minGrey = 220; //intensity threshold for grey scale image. 240 for handy footage, 200 for 1.003 blue
 int maxGrey = 255;
 
 // oldBlobPoints -> newBlobPoints
@@ -85,7 +86,7 @@ vector<int> LEDtoOldBlobMatching;
 const int bufferSize = 5;
 Point2d pointBuffer[bufferSize];
 
-Mat imgGrey, imgGreyOld, imgBinary, bgr;
+Mat imgGrey, imgGreyOld, imgBinary, imgBinaryOld, bgr;
 
 //PnP
 vector <Point2d> imagePoints2D;
@@ -582,14 +583,16 @@ void LEDdetect()
 
 void greyLEDdetect(){
 	cvtColor(image, imgGrey, cv::COLOR_BGR2GRAY);
-	//threshold(imgGrey, imgBinary, minGrey, 255, THRESH_BINARY); //imgBinary only used to show internal Mat of blob detector
-	inRange(imgGrey, minGrey, maxGrey, imgBinary); //Threshold the image
+	inRange(imgGrey, minGrey, maxGrey, imgBinary); //Thresholde image
 	//morphOpen(imgBinary);
 	//morphClose(imgBinary);
 	detector->detect(imgBinary, keypoints);
 	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, newBlobPoints);
 	//todo: sort out blobs by colour
+	//todo: remove
+	/*RotatedRect rr = fitEllipse(newBlobPoints);
+	ellipse(imgDraw, rr, Scalar(0, 255, 0), 3, LINE_AA);*/
 }
 
 void PnPapproxInit() {
@@ -642,15 +645,15 @@ void PnPtest(int frame) {
 	double bank = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
 	double attitude = asin(rotmatTest.at<double>(1, 0));
 
-	cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
-		<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;
+	/*cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
+		<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;*/
 
-	cout << "rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
+	//cout << "rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
 
 	//rotmatTest = rotmatTest.inv(DECOMP_SVD);
 	Rodrigues(rotmatTest, rvecTest);
 
-	cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
+	//cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
 
 	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
 	
@@ -836,53 +839,54 @@ void drawTruePose(int frame) {
 	transvec.push_back(-allSLERPedPoses[frame-1][7]);//z
 
 	projectPoints(truePoints, rotvec, transvec, cameraMatrix, distortCoeffs, trueImgPoints);
-	cout << "true rot: " << rotvec[0] << " " << rotvec[1] << " " << rotvec[2] << endl
-		<< "true trans: " << transvec[0] << " " << transvec[1] << " " << transvec[2] << endl;
+	/*cout << "true rot: " << rotvec[0] << " " << rotvec[1] << " " << rotvec[2] << endl
+		<< "true trans: " << transvec[0] << " " << transvec[1] << " " << transvec[2] << endl;*/
 
 	double heading = atan2(-rotmat.at<double>(2, 0), rotmat.at<double>(0, 0));
 	double bank = atan2(-rotmat.at<double>(1, 2), rotmat.at<double>(1, 1));
 	double attitude = asin(rotmat.at<double>(1, 0));
 
-	cout << "true rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
+	//cout << "true rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
 
 	for (Point2d p : trueImgPoints) {
 		circle(image, p, 1, Scalar(255, 0, 0), 2);
 	}
 }
 
-void trackBlobs() { //used to match new blobs to old blobs
+void trackBlobsOFlow() { //used to match new blobs to old blobs
 	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
 
 	//dense optical flow:
-		Mat flow(imgGreyOld.size(), CV_32FC2);
-		calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
-		// visualization
-		Mat flow_parts[2];
-		split(flow, flow_parts);
-		Mat magnitude, angle, magn_norm;
-		cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
-		normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
-		angle *= ((1.f / 360.f) * (180.f / 255.f));
-		//build hsv image
-		Mat _hsv[3], hsv, hsv8;
-		_hsv[0] = angle;
-		_hsv[1] = Mat::ones(angle.size(), CV_32F);
-		_hsv[2] = magn_norm;
-		merge(_hsv, 3, hsv);
-		hsv.convertTo(hsv8, CV_8U, 255.0);
-		cvtColor(hsv8, bgr, COLOR_HSV2BGR);
-		imshow("frame2", bgr);
+		//Mat flow(imgGreyOld.size(), CV_32FC2);
+		//calcOpticalFlowFarneback(imgGreyOld, imgGrey, flow, 0.5, 3, 15, 3, 5, 1.1, 0);
+		//// visualization
+		//Mat flow_parts[2];
+		//split(flow, flow_parts);
+		//Mat magnitude, angle, magn_norm;
+		//cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
+		//normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
+		//angle *= ((1.f / 360.f) * (180.f / 255.f));
+		////build hsv image
+		//Mat _hsv[3], hsv, hsv8;
+		//_hsv[0] = angle;
+		//_hsv[1] = Mat::ones(angle.size(), CV_32F);
+		//_hsv[2] = magn_norm;
+		//merge(_hsv, 3, hsv);
+		//hsv.convertTo(hsv8, CV_8U, 255.0);
+		//cvtColor(hsv8, bgr, COLOR_HSV2BGR);
+		//imshow("frame2", bgr);
 
 
 	//sparse optical flow:
-		/*calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(15, 15), 3, term);
+		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(10, 10), 4, term);
 		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
 		for (int i = 0; i < oldBlobPoints.size(); i++) {
-			circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
+			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
 			//putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
 		}
 		for (int i = 0; i < predictedBlobPoints.size(); i++) {
-			circle(image, predictedBlobPoints[i], 2, Scalar(0, 255, 255), 2);// yellow: predicted blobs
+			circle(image, predictedBlobPoints[i], 4, Scalar(0, 255, 0), 2);//predicted blobs
+			line(image, oldBlobPoints[i], predictedBlobPoints[i], Scalar(0, 255, 0), 2);
 
 			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
 			//putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
@@ -894,7 +898,7 @@ void trackBlobs() { //used to match new blobs to old blobs
 			if (index >= 0) {
 				LEDtoNewBlobMatching[i] = oldToNewBlobMatching[LEDtoOldBlobMatching[i]];
 				if (LEDtoNewBlobMatching[i] >= 0) {
-					putText(image, to_string(i), newBlobPoints[LEDtoNewBlobMatching[i]], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
+					//putText(image, to_string(i), newBlobPoints[LEDtoNewBlobMatching[i]], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 				}
 			}
 			else {
@@ -902,7 +906,7 @@ void trackBlobs() { //used to match new blobs to old blobs
 			}
 		}
 		imshow("Original", image);
-		waitKey(1);*/
+		waitKey(1);
 	}
 }
 
@@ -1003,10 +1007,16 @@ int main()
 		return -1;
 	}
 
+	imgSizeX = cap.get(CAP_PROP_FRAME_WIDTH);
+	imgSizeY = cap.get(CAP_PROP_FRAME_HEIGHT);
+
+	imgResizeX = imgSizeX * resScale; //640;
+	imgResizeY = imgSizeY * resScale;//360; || 512
+
 	cap.set(CAP_PROP_POS_FRAMES, startFrame); //offset start frame
 
-	cap.set(CAP_PROP_FRAME_WIDTH, imgSizeX);
-	cap.set(CAP_PROP_FRAME_HEIGHT, imgSizeY);
+	/*cap.set(CAP_PROP_FRAME_WIDTH, imgSizeX);
+	cap.set(CAP_PROP_FRAME_HEIGHT, imgSizeY);*/
 
 	//fill ground truth from files
 	allFrameTimeStamps = readAllTS(pathToImgSequence + "ts.txt");
@@ -1068,7 +1078,8 @@ int main()
 	//PnPapproxInit();
 	PnPinit();
 
-	paused = true;
+	paused = false;
+	recordMode = false;
 	bool frameRead = cap.read(frame); // read a new frame from video (frame if resize, image if not)
 
 	for(;;)
@@ -1091,6 +1102,8 @@ int main()
 		}
 		resize(frame, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
 		image.copyTo(imgDraw);
+		imshow("Original", image);
+		waitKey(1);
 
 		//detectHLSthresholds(); //show regions of specified HLS values
 		//trackCamshift();
@@ -1102,20 +1115,19 @@ int main()
 
 
 		greyLEDdetect();
-		trackBlobs();
-		//PnPtest(frameCounter);
+		trackBlobsOFlow();
+		PnPtest(frameCounter);
 
 		//calculatePose();
-		//solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
+		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
 		//drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
+		imgBinaryOld = imgBinary.clone();
 		oldBlobPoints = newBlobPoints;
-
-		//resize(imgGrey, imgGrey, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
-		//resize(image, image, Size(imgResizeX, imgResizeY), 0, 0, INTER_CUBIC);
+		
 		imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 		namedWindow("Draw", 1);
@@ -1123,20 +1135,24 @@ int main()
 		createTrackbar("minGrey", "Binary", &minGrey, 255, 0);
 		createTrackbar("maxGrey", "Binary", &maxGrey, 255, 0);
 		imshow("Draw", imgDraw);
-		//imshow("Binary", imgBinary);
+		imshow("Binary", imgBinary);
 
 
 		if (recordMode) {
 			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
-			imwrite("recorder/redbackproj" + to_string(frameCounter) + ".png", backprojImage);
-			//imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
-			//imwrite("recorder/backproj" + to_string(frameCounter) + ".png", bothbackproj);
+			imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
+			//imwrite("recorder/gray" + to_string(frameCounter) + ".png", imgGrey);
+			imwrite("recorder/bin" + to_string(frameCounter) + ".png", imgBinary);
+			//imwrite("recorder/backproj1" + to_string(frameCounter) + ".png", backprojImage);
+			//imwrite("recorder/backproj2" + to_string(frameCounter) + ".png", backprojImage2);
+			//imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
+			//imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
 		}
 
-		//if (waitKey(0) == 32) //frame by frame with 'space'
-		//{
-		//	cout << "space key is pressed by user" << endl;
-		//}
+		if (waitKey(0) == 32) //frame by frame with 'space'
+		{
+			cout << "space key is pressed by user" << endl;
+		}
 
 		char c = (char)waitKey(10);
 		switch (c)
@@ -1158,21 +1174,26 @@ int main()
 		case 'p':
 			paused = !paused;
 			break;
+		case 'q':
+			if (paused) {
+
+			}
+			break;
 		case 'r':
 			recordMode = !recordMode;
 			break;
 		case 's':
 			imwrite("recorder/original" + to_string(frameCounter) + ".png", image);
-			//imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
+			imwrite("recorder/draw" + to_string(frameCounter) + ".png", imgDraw);
 			//imwrite("recorder/gray" + to_string(frameCounter) + ".png", imgGrey);
-			//imwrite("recorder/bin" + to_string(frameCounter) + ".png", imgBinary);
+			imwrite("recorder/bin" + to_string(frameCounter) + ".png", imgBinary);
 			//imwrite("recorder/backproj1" + to_string(frameCounter) + ".png", backprojImage);
 			//imwrite("recorder/backproj2" + to_string(frameCounter) + ".png", backprojImage2);
 			//imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
-			imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
+			//imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
 			break;
 		default:
-			;
+			;//cout << c;
 		}
 
 		if (!paused) {
