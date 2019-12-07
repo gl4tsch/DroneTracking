@@ -107,6 +107,18 @@ vector<float> err;
 TermCriteria term = TermCriteria(TermCriteria::COUNT + TermCriteria::EPS, 10, 0.03);
 vector<Point2f> newBlobPoints, oldBlobPoints, predictedBlobPoints;
 
+//Kalman Filter
+KalmanFilter KF;
+int nStates = 18;            // the number of states
+int nMeasurements = 6;       // the number of measured states
+int nInputs = 0;             // the number of action control
+double dt = 0.125;           // time between measurements (1/FPS) //0.125
+// Instantiate estimated translation and rotation
+cv::Mat translation_estimated(3, 1, CV_64F);
+cv::Mat rotation_estimated(3, 3, CV_64F);
+Mat measurements;
+
+
 class quat {
 	public:
 		double x, y, z, w;
@@ -192,6 +204,107 @@ quat slerp(quat qa, quat qb, double t) {
 	qm.z = (qa.z * ratioA + qb.z * ratioB);
 	return qm;
 }
+
+
+// Converts a given Euler angles to Rotation Matrix
+// Convention used is Y-Z-X Tait-Bryan angles
+// Reference:
+// https://www.euclideanspace.com/maths/geometry/rotations/conversions/eulerToMatrix/index.htm
+cv::Mat euler2rot(const cv::Mat & euler)
+{
+	cv::Mat rotationMatrix(3, 3, CV_64F);
+
+	double bank = euler.at<double>(0);
+	double attitude = euler.at<double>(1);
+	double heading = euler.at<double>(2);
+
+	// Assuming the angles are in radians.
+	double ch = cos(heading);
+	double sh = sin(heading);
+	double ca = cos(attitude);
+	double sa = sin(attitude);
+	double cb = cos(bank);
+	double sb = sin(bank);
+
+	double m00, m01, m02, m10, m11, m12, m20, m21, m22;
+
+	m00 = ch * ca;
+	m01 = sh * sb - ch * sa*cb;
+	m02 = ch * sa*sb + sh * cb;
+	m10 = sa;
+	m11 = ca * cb;
+	m12 = -ca * sb;
+	m20 = -sh * ca;
+	m21 = sh * sa*cb + ch * sb;
+	m22 = -sh * sa*sb + ch * cb;
+
+	rotationMatrix.at<double>(0, 0) = m00;
+	rotationMatrix.at<double>(0, 1) = m01;
+	rotationMatrix.at<double>(0, 2) = m02;
+	rotationMatrix.at<double>(1, 0) = m10;
+	rotationMatrix.at<double>(1, 1) = m11;
+	rotationMatrix.at<double>(1, 2) = m12;
+	rotationMatrix.at<double>(2, 0) = m20;
+	rotationMatrix.at<double>(2, 1) = m21;
+	rotationMatrix.at<double>(2, 2) = m22;
+
+	return rotationMatrix;
+}
+
+// Converts a given Rotation Matrix to Euler angles
+// Convention used is Y-Z-X Tait-Bryan angles
+// Reference code implementation:
+// https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToEuler/index.htm
+cv::Mat rot2euler(const cv::Mat & rotationMatrix)
+{
+	cv::Mat euler(3, 1, CV_64F);
+
+	double m00 = rotationMatrix.at<double>(0, 0);
+	double m02 = rotationMatrix.at<double>(0, 2);
+	double m10 = rotationMatrix.at<double>(1, 0);
+	double m11 = rotationMatrix.at<double>(1, 1);
+	double m12 = rotationMatrix.at<double>(1, 2);
+	double m20 = rotationMatrix.at<double>(2, 0);
+	double m22 = rotationMatrix.at<double>(2, 2);
+
+	double bank, attitude, heading;
+
+	// Assuming the angles are in radians.
+	if (m10 > 0.998) { // singularity at north pole
+		bank = 0;
+		attitude = CV_PI / 2;
+		heading = atan2(m02, m22);
+	}
+	else if (m10 < -0.998) { // singularity at south pole
+		bank = 0;
+		attitude = -CV_PI / 2;
+		heading = atan2(m02, m22);
+	}
+	else
+	{
+		bank = atan2(-m12, m11);
+		attitude = asin(m10);
+		heading = atan2(-m20, m00);
+	}
+
+	euler.at<double>(0) = bank;
+	euler.at<double>(1) = attitude;
+	euler.at<double>(2) = heading;
+
+	return euler;
+}
+
+void fillMeasurements(cv::Mat &measurements, const vector<double> &transVec, const double &roll, const double &pitch, const double &yaw)
+{
+	// Set measurement to predict
+	measurements.at<double>(0) = transVec[0]; // x
+	measurements.at<double>(1) = transVec[1]; // y
+	measurements.at<double>(2) = transVec[2]; // z
+	measurements.at<double>(3) = roll;      // roll
+	measurements.at<double>(4) = pitch;      // pitch
+	measurements.at<double>(5) = yaw;      // yaw
+}
+
 
 int matchPointToPoints(Point2f point, vector<Point2f> points, float maxDistThresh) {
 	float closest = numeric_limits<float>::infinity();
@@ -641,9 +754,9 @@ void PnPtest(int frame) {
 	Mat rotmatTest;
 	Rodrigues(rvecTest, rotmatTest);
 	//https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToEuler/index.htm
-	double heading = atan2(-rotmatTest.at<double>(2, 0), rotmatTest.at<double>(0, 0));
-	double bank = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
-	double attitude = asin(rotmatTest.at<double>(1, 0));
+	double roll = atan2(-rotmatTest.at<double>(2, 0), rotmatTest.at<double>(0, 0));
+	double pitch = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
+	double yaw = asin(rotmatTest.at<double>(1, 0));
 
 	/*cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
 		<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;*/
@@ -654,6 +767,8 @@ void PnPtest(int frame) {
 	Rodrigues(rotmatTest, rvecTest);
 
 	//cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
+
+	fillMeasurements(measurements, tvecTest, yaw, pitch, roll);
 
 	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
 	
@@ -670,6 +785,7 @@ void PnPtest(int frame) {
 	}
 	imshow("Draw", imgDraw);
 	waitKey(1);
+	cout << "";
 	if (reprojectioncounter < 4){
 		//bad pose. reinitiate detection phase
 		//relevantLEDs = get 4 random LEDs from modelPoints3D
@@ -780,10 +896,10 @@ void drawTruePose(int frame) {
 	truePoints.push_back(p);
 
 	vector<double> rotvec, transvec;
-	double qx = allSLERPedPoses[frame-1][1];
-	double qy = allSLERPedPoses[frame-1][2];
-	double qz = allSLERPedPoses[frame-1][3];
-	double qw = allSLERPedPoses[frame-1][4];
+	double qx = allSLERPedPoses[frame][1];
+	double qy = allSLERPedPoses[frame][2];
+	double qz = allSLERPedPoses[frame][3];
+	double qw = allSLERPedPoses[frame][4];
 
 	//axis angle
 	//quaternion to axisangle, see https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToAngle/index.htm
@@ -834,9 +950,9 @@ void drawTruePose(int frame) {
 
 	Rodrigues(rotmat, rotvec);
 
-	transvec.push_back(allSLERPedPoses[frame-1][5]);//x
-	transvec.push_back(-allSLERPedPoses[frame-1][6]);//y
-	transvec.push_back(-allSLERPedPoses[frame-1][7]);//z
+	transvec.push_back(allSLERPedPoses[frame][5]);//x
+	transvec.push_back(-allSLERPedPoses[frame][6]);//y
+	transvec.push_back(-allSLERPedPoses[frame][7]);//z
 
 	projectPoints(truePoints, rotvec, transvec, cameraMatrix, distortCoeffs, trueImgPoints);
 	/*cout << "true rot: " << rotvec[0] << " " << rotvec[1] << " " << rotvec[2] << endl
@@ -849,7 +965,7 @@ void drawTruePose(int frame) {
 	//cout << "true rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
 
 	for (Point2d p : trueImgPoints) {
-		circle(image, p, 1, Scalar(255, 0, 0), 2);
+		circle(image, p, 1, Scalar(255, 0, 255), 2);
 	}
 }
 
@@ -881,15 +997,15 @@ void trackBlobsOFlow() { //used to match new blobs to old blobs
 		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(10, 10), 4, term);
 		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
 		for (int i = 0; i < oldBlobPoints.size(); i++) {
-			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
-			//putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
+			circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
+			putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
 		}
 		for (int i = 0; i < predictedBlobPoints.size(); i++) {
 			circle(image, predictedBlobPoints[i], 4, Scalar(0, 255, 0), 2);//predicted blobs
 			line(image, oldBlobPoints[i], predictedBlobPoints[i], Scalar(0, 255, 0), 2);
 
 			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
-			//putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
+			putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 		}
 		imshow("Original", image);
 		waitKey(1);
@@ -910,18 +1026,9 @@ void trackBlobsOFlow() { //used to match new blobs to old blobs
 	}
 }
 
-void calculatePose() {
-	//solvePnP(detectedLEDpositions, correspondingBlobs, );
-}
-
-void givenLEDmatchBlobs(vector<Point2d> pointsA, vector<Point2d> pointsB) {
-
-	//sort modelPoints3D and imagePoints2D to match
-	//cv::projectPoints (InputArray objectPoints, InputArray rvec, InputArray tvec, InputArray cameraMatrix, InputArray distCoeffs, OutputArray imagePoints, OutputArray jacobian=noArray(), double aspectRatio=0)
-}
-
 void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int nInputs, double dt)
 {
+	//https://docs.opencv.org/master/dc/d2c/tutorial_real_time_pose.html
 	KF.init(nStates, nMeasurements, nInputs, CV_64F);                 // init Kalman Filter
 	cv::setIdentity(KF.processNoiseCov, cv::Scalar::all(1e-5));       // set process noise
 	cv::setIdentity(KF.measurementNoiseCov, cv::Scalar::all(1e-4));   // set measurement noise
@@ -980,17 +1087,25 @@ void initKalmanFilter(cv::KalmanFilter &KF, int nStates, int nMeasurements, int 
 	KF.measurementMatrix.at<double>(5, 11) = 1; // yaw
 }
 
-void kalman() {
-	//https://docs.opencv.org/master/dc/d2c/tutorial_real_time_pose.html
-	KalmanFilter KF;
-	int nStates = 18;            // the number of states
-	int nMeasurements = 6;       // the number of measured states
-	int nInputs = 0;             // the number of action control
-	double dt = 0.125;           // time between measurements (1/FPS)
-	initKalmanFilter(KF, nStates, nMeasurements, nInputs, dt);    // init function
+void updateKalmanFilter(cv::KalmanFilter &KF, cv::Mat &measurement, cv::Mat &translation_estimated, cv::Mat &rotation_estimated)
+{
+	// First predict, to update the internal statePre variable
+	cv::Mat prediction = KF.predict();
+	// The "correct" phase that is going to use the predicted value and our measurement
+	cv::Mat estimated = KF.correct(measurement);
+	// Estimated translation
+	translation_estimated.at<double>(0) = estimated.at<double>(0);
+	translation_estimated.at<double>(1) = estimated.at<double>(1);
+	translation_estimated.at<double>(2) = estimated.at<double>(2);
+	// Estimated euler angles
+	cv::Mat eulers_estimated(3, 1, CV_64F);
+	eulers_estimated.at<double>(0) = estimated.at<double>(9);
+	eulers_estimated.at<double>(1) = estimated.at<double>(10);
+	eulers_estimated.at<double>(2) = estimated.at<double>(11);
+	// Convert estimated quaternion to rotation matrix
+	rotation_estimated = euler2rot(eulers_estimated);
 
 }
-
 
 int main()
 {
@@ -1077,6 +1192,9 @@ int main()
 
 	//PnPapproxInit();
 	PnPinit();
+	
+	initKalmanFilter(KF, nStates, nMeasurements, nInputs, dt);    // init function
+	measurements = Mat(nMeasurements, 1, CV_64FC1); measurements.setTo(Scalar(0));
 
 	paused = false;
 	recordMode = false;
@@ -1113,15 +1231,23 @@ int main()
 			//fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
 		}
 
-
 		greyLEDdetect();
 		trackBlobsOFlow();
 		PnPtest(frameCounter);
 
-		//calculatePose();
+		updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
+		vector<Point2d> outputTestPoints;
+		vector<double> rotvecKF;
+		Rodrigues(rotation_estimated, rotvecKF);
+		projectPoints(modelPoints3D, rotvecKF, translation_estimated, cameraMatrix, distortCoeffs, outputTestPoints);
+		for(Point2d p : outputTestPoints)
+		{
+			circle(imgDraw, p, 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+		}
+
 		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		//drawTruePose(frameCounter);
+		drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
