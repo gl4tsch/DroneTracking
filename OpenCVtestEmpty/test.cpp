@@ -30,8 +30,9 @@ int imgResizeX;
 int imgResizeY;
 Mat image;
 Mat imgDraw;
-Mat imgHLS;
+Mat imgHLS, imgHSV, imgYCrCb;
 Mat imgThresholded;
+Mat imgThreshC1, imgThreshC2;
 int frameCounter = startFrame;
 double t;
 //these two vectors needed for output of findContours
@@ -109,14 +110,16 @@ vector<Point2f> newBlobPoints, oldBlobPoints, predictedBlobPoints;
 
 //Kalman Filter
 KalmanFilter KF;
-int nStates = 18;            // the number of states
-int nMeasurements = 6;       // the number of measured states
-int nInputs = 0;             // the number of action control
-double dt = 0.125;           // time between measurements (1/FPS) //0.125
+int nStates = 18;		// the number of states
+int nMeasurements = 6;	// the number of measured states
+int nInputs = 0;		// the number of action control
+double dt = 0.016;		// time between measurements (1/FPS) //0.125
 // Instantiate estimated translation and rotation
 cv::Mat translation_estimated(3, 1, CV_64F);
 cv::Mat rotation_estimated(3, 3, CV_64F);
 Mat measurements;
+
+bool trackingLost = true;
 
 
 class quat {
@@ -294,15 +297,15 @@ cv::Mat rot2euler(const cv::Mat & rotationMatrix)
 	return euler;
 }
 
-void fillMeasurements(cv::Mat &measurements, const vector<double> &transVec, const double &roll, const double &pitch, const double &yaw)
+void fillMeasurements(cv::Mat &measurements, const vector<double> &transVec, const Mat &rotation_measured)
 {
 	// Set measurement to predict
 	measurements.at<double>(0) = transVec[0]; // x
 	measurements.at<double>(1) = transVec[1]; // y
 	measurements.at<double>(2) = transVec[2]; // z
-	measurements.at<double>(3) = roll;      // roll
-	measurements.at<double>(4) = pitch;      // pitch
-	measurements.at<double>(5) = yaw;      // yaw
+	measurements.at<double>(3) = rotation_measured.at<double>(0);      // roll
+	measurements.at<double>(4) = rotation_measured.at<double>(1);      // pitch
+	measurements.at<double>(5) = rotation_measured.at<double>(2);      // yaw
 }
 
 
@@ -321,8 +324,61 @@ int matchPointToPoints(Point2f point, vector<Point2f> points, float maxDistThres
 	return index;
 }
 
+void getBlobsByColor(vector<Point2f>& blobPositions, Mat& imgThreshC1, Mat& imgThreshC2, vector<int>& blobsC1, vector<int>& blobsC2, int radius) {
+	Mat bothThresh = imgThreshC1 + imgThreshC2;
+	/*uchar u = bothThresh.at<uchar>((int)blobPositions[0].x - 5, (int)blobPositions[0].y);
+	circle(bothThresh, (Point)blobPositions[0], 1, Scalar(0, 255, 0), 1);
+	int a = (int)blobPositions[0].x;
+	imshow("debug", bothThresh);
+	waitKey(1);*/
+	for (int i = 0; i < blobPositions.size(); i++) {
+		for (int j = 1; j <= radius; j++) {
+			if (bothThresh.at<uchar>((int)blobPositions[i].x + j, (int)blobPositions[i].y) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].x + j, (int)blobPositions[i].y) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].x - j, (int)blobPositions[i].y) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].x - j, (int)blobPositions[i].y) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y + j) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y + j) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y - j) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y - j) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+		}
+	}
+}
+
 void detectHLSthresholds() {
-	cvtColor(image, imgHLS, COLOR_BGR2HLS); //Convert the captured frame from BGR to HLS
+	cvtColor(image, imgHLS, COLOR_RGB2HLS); //Convert the captured frame from BGR to HLS
 	inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
 	//inRange(imgHLS, Scalar(87, 230, 255), Scalar(94, 255, 255), imgThresholded); //Threshold for party_-2_l_l.mp4 green
 	//inRange(imgHLS, Scalar(71, 169, 255), Scalar(98, 255, 255), imgThresholded); //Threshold for auto-darker3.mp4 blue
@@ -359,6 +415,25 @@ void detectHLSthresholds() {
 
 	imshow("Thresholded Image", imgThresholded); //show the thresholded image
 }
+
+void detectHSVthresholds() {
+	cvtColor(image, imgHSV, COLOR_BGR2HSV); //Convert the captured frame from BGR to HLS
+	inRange(imgHSV, Scalar(lowH, lowS, lowV), Scalar(highH, highS, highV), imgThresholded); //Threshold the image
+	imshow("Thresholded Image", imgThresholded); //show the thresholded image
+}
+
+void detectYCrCbthresholds() {
+	cvtColor(image, imgHSV, COLOR_BGR2YCrCb); //Convert the captured frame from BGR to HLS
+	inRange(imgHSV, Scalar(lowL, lowS, lowV), Scalar(highL, highS, highV), imgThresholded); //Threshold the image
+	imshow("Thresholded Image", imgThresholded); //show the thresholded image
+}
+
+void detectLabthresholds() {
+	cvtColor(image, imgHSV, COLOR_BGR2Lab); //Convert the captured frame from BGR to HLS
+	inRange(imgHSV, Scalar(lowL, lowS, lowV), Scalar(highL, highS, highV), imgThresholded); //Threshold the image
+	imshow("Thresholded Image", imgThresholded); //show the thresholded image
+}
+
 
 // User draws box around object to track. This triggers CAMShift to start tracking
 static void onMouse(int event, int x, int y, int, void*)
@@ -702,7 +777,7 @@ void greyLEDdetect(){
 	detector->detect(imgBinary, keypoints);
 	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, newBlobPoints);
-	//todo: sort out blobs by colour
+	
 	//todo: remove
 	/*RotatedRect rr = fitEllipse(newBlobPoints);
 	ellipse(imgDraw, rr, Scalar(0, 255, 0), 3, LINE_AA);*/
@@ -729,68 +804,97 @@ void PnPinit() {
 	cout << "Camera Matrix " << endl << cameraMatrix << endl;
 }
 
+void reDetectMatch() {
+	//sort blobs by x coordinate descending
+	sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
+
+	cvtColor(image, imgHLS, COLOR_RGB2HLS); //Convert the captured frame from BGR to HLS with hue switch because of red edge case
+	inRange(imgHLS, Scalar(15, 115, 255), Scalar(35, 255, 255), imgThreshC1); //Threshold for blue in darkblue 1.003
+	inRange(imgHLS, Scalar(85, 115, 255), Scalar(180, 255, 255), imgThreshC2); //Threshold for red in darkblue 1.003
+	vector<int> blobsC1, blobsC2;
+	getBlobsByColor(newBlobPoints, imgThreshC1, imgThreshC2, blobsC1, blobsC2, 10);
+
+	for (int i = 0; i < max((int)blobsC1.size(), 4); i++) { //left color from left to 3
+		LEDtoNewBlobMatching[4 - blobsC1.size() + i] = blobsC1[i];
+	}
+	for (int i = 0; i < max((int)blobsC2.size(), 6); i++) { //right color from 4 to right
+		LEDtoNewBlobMatching[4 + i] = blobsC2[i];
+	}
+}
+
 void PnPtest(int frame) {
 	vector<double> rvecTest, tvecTest;
 	vector<Point2d> outputTestPoints;
+	vector<Point3d> relevantLEDs; //those 3DLEDs that have a known 2D blob position
+	vector<Point2d> correspondingBlobs;//the corresponding blob positions
 
-	if (frame <= startFrame + 1) {
-		//sort blobs by x coordinate descending
-		sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
-		solvePnP(modelPoints3D, newBlobPoints, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+	if (trackingLost) {
+		reDetectMatch();
 	}
-	else {
-		vector<Point3d> relevantLEDs; //those 3DLEDs that have a known 2D blob position
-		vector<Point2d> correspondingBlobs;//the corresponding blob positions
-		for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
-			if (LEDtoNewBlobMatching[i] >= 0) { //push all 3d led points that have a match
-				relevantLEDs.push_back(modelPoints3D[i]);
-				correspondingBlobs.push_back(newBlobPoints[LEDtoNewBlobMatching[i]]);
+	for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
+		if (LEDtoNewBlobMatching[i] >= 0) { //push all 3d led points that have a match
+			relevantLEDs.push_back(modelPoints3D[i]);
+			correspondingBlobs.push_back(newBlobPoints[LEDtoNewBlobMatching[i]]);
+		}
+	}
+
+	if (relevantLEDs.size() >= 4) {
+		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+
+		//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
+		Mat rotmatTest;
+		Mat eulermatTest(3, 1, CV_64F);
+		Rodrigues(rvecTest, rotmatTest);
+
+		eulermatTest = rot2euler(rotmatTest);
+
+		////https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToEuler/index.htm
+		//double roll = atan2(-rotmatTest.at<double>(2, 0), rotmatTest.at<double>(0, 0));
+		//double pitch = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
+		//double yaw = asin(rotmatTest.at<double>(1, 0));
+
+
+
+		/*cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
+			<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;*/
+
+			//cout << "rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
+
+			//rotmatTest = rotmatTest.inv(DECOMP_SVD);
+			//Rodrigues(rotmatTest, rvecTest);
+
+			//cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
+
+		projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
+
+		int reprojectioncounter = 0;
+		for (int i = 0; i < outputTestPoints.size(); i++) {
+			circle(imgDraw, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+			putText(imgDraw, to_string(i), outputTestPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
+			//for all reprojected LEDs check if a blob is detected there
+			int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 5);
+			LEDtoOldBlobMatching[i] = index;
+			if (index >= 0) {
+				reprojectioncounter++;
 			}
 		}
- 		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
-	}
-
-	//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
-	Mat rotmatTest;
-	Rodrigues(rvecTest, rotmatTest);
-	//https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToEuler/index.htm
-	double roll = atan2(-rotmatTest.at<double>(2, 0), rotmatTest.at<double>(0, 0));
-	double pitch = atan2(-rotmatTest.at<double>(1, 2), rotmatTest.at<double>(1, 1));
-	double yaw = asin(rotmatTest.at<double>(1, 0));
-
-	/*cout << "rot: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl
-		<< "trans: " << tvecTest[0] << " " << tvecTest[1] << " " << tvecTest[2] << endl;*/
-
-	//cout << "rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
-
-	//rotmatTest = rotmatTest.inv(DECOMP_SVD);
-	Rodrigues(rotmatTest, rvecTest);
-
-	//cout << "rotInv: " << rvecTest[0] << " " << rvecTest[1] << " " << rvecTest[2] << endl;
-
-	fillMeasurements(measurements, tvecTest, yaw, pitch, roll);
-
-	projectPoints(modelPoints3D, rvecTest, tvecTest, cameraMatrix, distortCoeffs, outputTestPoints);
-	
-	int reprojectioncounter = 0;
-	for (int i = 0; i < outputTestPoints.size(); i++) {
-		circle(imgDraw, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
-		putText(imgDraw, to_string(i), outputTestPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
-		//for all reprojected LEDs check if a blob is detected there
-		int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 5);
-		LEDtoOldBlobMatching[i] = index;
-		if (index >= 0) {
-			reprojectioncounter++;
+		imshow("Draw", imgDraw);
+		waitKey(1);
+		cout << "";
+		if (reprojectioncounter < 4) {
+			//bad pose. reinitiate detection phase
+			//relevantLEDs = get 4 random LEDs from modelPoints3D
+			//solveP3P with all possible matches in newBlobPoints
+			//reproject each one and count LED to blob matches
+			trackingLost = true;
+		}
+		else {
+			trackingLost = false;
+			fillMeasurements(measurements, tvecTest, eulermatTest);
 		}
 	}
-	imshow("Draw", imgDraw);
-	waitKey(1);
-	cout << "";
-	if (reprojectioncounter < 4){
-		//bad pose. reinitiate detection phase
-		//relevantLEDs = get 4 random LEDs from modelPoints3D
-		//solveP3P with all possible matches in newBlobPoints
-		//reproject each one and count LED to blob matches
+	else {
+		trackingLost = true;
 	}
 }
 
@@ -970,7 +1074,7 @@ void drawTruePose(int frame) {
 }
 
 void trackBlobsOFlow() { //used to match new blobs to old blobs
-	if (frameCounter > startFrame + 1) { //if not first frame do optical flow
+	if (oldBlobPoints.size() > 0) { //if there is information from a previous frame
 
 	//dense optical flow:
 		//Mat flow(imgGreyOld.size(), CV_32FC2);
@@ -1021,6 +1125,7 @@ void trackBlobsOFlow() { //used to match new blobs to old blobs
 				LEDtoNewBlobMatching[i] = -1;
 			}
 		}
+
 		imshow("Original", image);
 		waitKey(1);
 	}
@@ -1224,6 +1329,9 @@ int main()
 		waitKey(1);
 
 		//detectHLSthresholds(); //show regions of specified HLS values
+		//detectHSVthresholds();
+		//detectYCrCbthresholds();
+		//detectLabthresholds();
 		//trackCamshift();
 		//LEDdetect();
 		//fitBandBlob();
@@ -1232,7 +1340,9 @@ int main()
 		}
 
 		greyLEDdetect();
-		trackBlobsOFlow();
+		if (!trackingLost) {
+			trackBlobsOFlow();
+		}
 		PnPtest(frameCounter);
 
 		updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
@@ -1242,19 +1352,19 @@ int main()
 		projectPoints(modelPoints3D, rotvecKF, translation_estimated, cameraMatrix, distortCoeffs, outputTestPoints);
 		for(Point2d p : outputTestPoints)
 		{
-			circle(imgDraw, p, 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
+			circle(imgDraw, p, 1, Scalar(255, 0, 255), 2); // kalman predicted LEDs
 		}
 
 		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		drawTruePose(frameCounter);
+		//drawTruePose(frameCounter);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
 		imgBinaryOld = imgBinary.clone();
 		oldBlobPoints = newBlobPoints;
 		
-		imshow("imgGrey", imgGrey);
+		//imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 		namedWindow("Draw", 1);
 		namedWindow("Binary", 1);
