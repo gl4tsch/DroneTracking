@@ -324,59 +324,6 @@ int matchPointToPoints(Point2f point, vector<Point2f> points, float maxDistThres
 	return index;
 }
 
-void getBlobsByColor(vector<Point2f>& blobPositions, Mat& imgThreshC1, Mat& imgThreshC2, vector<int>& blobsC1, vector<int>& blobsC2, int radius) {
-	Mat bothThresh = imgThreshC1 + imgThreshC2;
-	/*uchar u = bothThresh.at<uchar>((int)blobPositions[0].x - 5, (int)blobPositions[0].y);
-	circle(bothThresh, (Point)blobPositions[0], 1, Scalar(0, 255, 0), 1);
-	int a = (int)blobPositions[0].x;
-	imshow("debug", bothThresh);
-	waitKey(1);*/
-	for (int i = 0; i < blobPositions.size(); i++) {
-		for (int j = 1; j <= radius; j++) {
-			if (bothThresh.at<uchar>((int)blobPositions[i].x + j, (int)blobPositions[i].y) > 0) {
-				if (imgThreshC1.at<uchar>((int)blobPositions[i].x + j, (int)blobPositions[i].y) > 0) {
-					blobsC1.push_back(i);
-					break;
-				}
-				else {
-					blobsC2.push_back(i);
-					break;
-				}
-			}
-			else if (bothThresh.at<uchar>((int)blobPositions[i].x - j, (int)blobPositions[i].y) > 0) {
-				if (imgThreshC1.at<uchar>((int)blobPositions[i].x - j, (int)blobPositions[i].y) > 0) {
-					blobsC1.push_back(i);
-					break;
-				}
-				else {
-					blobsC2.push_back(i);
-					break;
-				}
-			}
-			else if (bothThresh.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y + j) > 0) {
-				if (imgThreshC1.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y + j) > 0) {
-					blobsC1.push_back(i);
-					break;
-				}
-				else {
-					blobsC2.push_back(i);
-					break;
-				}
-			}
-			else if (bothThresh.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y - j) > 0) {
-				if (imgThreshC1.at<uchar>((int)blobPositions[i].x, (int)blobPositions[i].y - j) > 0) {
-					blobsC1.push_back(i);
-					break;
-				}
-				else {
-					blobsC2.push_back(i);
-					break;
-				}
-			}
-		}
-	}
-}
-
 void detectHLSthresholds() {
 	cvtColor(image, imgHLS, COLOR_RGB2HLS); //Convert the captured frame from BGR to HLS
 	inRange(imgHLS, Scalar(lowH, lowL, lowS), Scalar(highH, highL, highS), imgThresholded); //Threshold the image
@@ -596,6 +543,55 @@ void fitBandBlob()
 //	}
 //}
 
+void getBlobsByColor(vector<Point2f>& blobPositions, Mat& imgThreshC1, Mat& imgThreshC2, vector<int>& blobsC1, vector<int>& blobsC2, int radius) {
+	//Mat bothThresh = Mat(imgThreshC1.rows, imgThreshC1.cols, CV_8U);
+	Mat bothThresh = imgThreshC1 + imgThreshC2;
+	for (int i = 0; i < blobPositions.size(); i++) {
+		for (int j = 1; j <= radius; j++) {
+			if (bothThresh.at<uchar>((int)blobPositions[i].y, (int)blobPositions[i].x + j) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].y, (int)blobPositions[i].x + j) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].y, (int)blobPositions[i].x - j) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].y, (int)blobPositions[i].x - j) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].y + j, (int)blobPositions[i].x) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].y + j, (int)blobPositions[i].x) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+			else if (bothThresh.at<uchar>((int)blobPositions[i].y - j, (int)blobPositions[i].x) > 0) {
+				if (imgThreshC1.at<uchar>((int)blobPositions[i].y - j, (int)blobPositions[i].x) > 0) {
+					blobsC1.push_back(i);
+					break;
+				}
+				else {
+					blobsC2.push_back(i);
+					break;
+				}
+			}
+		}
+	}
+}
+
 void trackCamshift() {
 	if (!paused)
 	{
@@ -778,6 +774,9 @@ void greyLEDdetect(){
 	drawKeypoints(imgDraw, keypoints, imgDraw, Scalar(255, 0, 0), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
 	KeyPoint::convert(keypoints, newBlobPoints);
 	
+	imshow("Draw", imgDraw);
+	waitKey(1);
+
 	//todo: remove
 	/*RotatedRect rr = fitEllipse(newBlobPoints);
 	ellipse(imgDraw, rr, Scalar(0, 255, 0), 3, LINE_AA);*/
@@ -809,16 +808,21 @@ void reDetectMatch() {
 	sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
 
 	cvtColor(image, imgHLS, COLOR_RGB2HLS); //Convert the captured frame from BGR to HLS with hue switch because of red edge case
+	//inRange(imgHLS, Scalar(0, 0, 0), Scalar(180, 255, 255), imgThreshC1);
 	inRange(imgHLS, Scalar(15, 115, 255), Scalar(35, 255, 255), imgThreshC1); //Threshold for blue in darkblue 1.003
 	inRange(imgHLS, Scalar(85, 115, 255), Scalar(180, 255, 255), imgThreshC2); //Threshold for red in darkblue 1.003
 	vector<int> blobsC1, blobsC2;
-	getBlobsByColor(newBlobPoints, imgThreshC1, imgThreshC2, blobsC1, blobsC2, 10);
+	getBlobsByColor(newBlobPoints, imgThreshC1, imgThreshC2, blobsC1, blobsC2, 5);
 
-	for (int i = 0; i < max((int)blobsC1.size(), 4); i++) { //left color from left to 3
-		LEDtoNewBlobMatching[4 - blobsC1.size() + i] = blobsC1[i];
+	if (!blobsC1.empty()) {
+		for (int i = 0; i < min((int)blobsC1.size(), 4); i++) { //left color from left to 3
+			LEDtoNewBlobMatching[4 - blobsC1.size() + i] = blobsC1[i];
+		}
 	}
-	for (int i = 0; i < max((int)blobsC2.size(), 6); i++) { //right color from 4 to right
-		LEDtoNewBlobMatching[4 + i] = blobsC2[i];
+	if (!blobsC2.empty()) {
+		for (int i = 0; i < min((int)blobsC2.size(), 6); i++) { //right color from 4 to right
+			LEDtoNewBlobMatching[4 + i] = blobsC2[i];
+		}
 	}
 }
 
@@ -1073,8 +1077,8 @@ void drawTruePose(int frame) {
 	}
 }
 
-void trackBlobsOFlow() { //used to match new blobs to old blobs
-	if (oldBlobPoints.size() > 0) { //if there is information from a previous frame
+void trackBlobsOFlow(float l1thresh) { //used to match new blobs to old blobs
+	if (!oldBlobPoints.empty()) { //if there is information from a previous frame
 
 	//dense optical flow:
 		//Mat flow(imgGreyOld.size(), CV_32FC2);
@@ -1099,17 +1103,29 @@ void trackBlobsOFlow() { //used to match new blobs to old blobs
 
 	//sparse optical flow:
 		calcOpticalFlowPyrLK(imgGreyOld, imgGrey, oldBlobPoints, predictedBlobPoints, status, err, Size(10, 10), 4, term);
+		ostringstream oss;
+		if (!err.empty()) {
+			copy(err.begin(), err.end() - 1, ostream_iterator<float>(oss, ","));
+			oss << err.back();
+		}
+		cout << "errors:" << oss.str() << endl;
+
 		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
 		for (int i = 0; i < oldBlobPoints.size(); i++) {
-			circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
+			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
 			putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
 		}
 		for (int i = 0; i < predictedBlobPoints.size(); i++) {
 			circle(image, predictedBlobPoints[i], 4, Scalar(0, 255, 0), 2);//predicted blobs
 			line(image, oldBlobPoints[i], predictedBlobPoints[i], Scalar(0, 255, 0), 2);
-
-			oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
+			if (err[i] > l1thresh) {
+				oldToNewBlobMatching[i] = -1;
+			}
+			else {
+				oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
+			}
 			putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
+			//putText(image, to_string((int)err[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 		}
 		imshow("Original", image);
 		waitKey(1);
@@ -1211,6 +1227,18 @@ void updateKalmanFilter(cv::KalmanFilter &KF, cv::Mat &measurement, cv::Mat &tra
 	rotation_estimated = euler2rot(eulers_estimated);
 
 }
+
+void drawKalmanPoints() {
+	vector<Point2d> outputTestPoints;
+	vector<double> rotvecKF;
+	Rodrigues(rotation_estimated, rotvecKF);
+	projectPoints(modelPoints3D, rotvecKF, translation_estimated, cameraMatrix, distortCoeffs, outputTestPoints);
+	for (Point2d p : outputTestPoints)
+	{
+		circle(imgDraw, p, 1, Scalar(255, 0, 255), 2); // kalman predicted LEDs
+	}
+}
+
 
 int main()
 {
@@ -1341,18 +1369,13 @@ int main()
 
 		greyLEDdetect();
 		if (!trackingLost) {
-			trackBlobsOFlow();
+			trackBlobsOFlow(20);
 		}
 		PnPtest(frameCounter);
 
-		updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
-		vector<Point2d> outputTestPoints;
-		vector<double> rotvecKF;
-		Rodrigues(rotation_estimated, rotvecKF);
-		projectPoints(modelPoints3D, rotvecKF, translation_estimated, cameraMatrix, distortCoeffs, outputTestPoints);
-		for(Point2d p : outputTestPoints)
-		{
-			circle(imgDraw, p, 1, Scalar(255, 0, 255), 2); // kalman predicted LEDs
+		if (!trackingLost) {
+			updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
+			drawKalmanPoints();
 		}
 
 		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
