@@ -18,10 +18,11 @@ struct point_sorter { // less for points
 
 //ground truth
 string pathToImgSequence("video_1.003_darkblue_new/");
-int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
+int startFrame = 87; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
+vector<vector<double>> allErrors;
 
 int imgSizeX = 1280;
 int imgSizeY = 1024;
@@ -94,7 +95,7 @@ vector <Point2d> imagePoints2D;
 vector <Point3d> modelPoints3D;
 Mat cameraMatrix, distortCoeffs;
 //rotation and translation output
-Mat rotVec, transVec; //Rotation in axis-angle form
+vector<double> rotVecEst, transVecEst, rotVecTrue, transVecTrue; //Rotation in axis-angle form
 
 //Ransac
 int iterationCount = 100;
@@ -138,6 +139,14 @@ class quat {
 			y = yy;
 			z = zz;
 			w = ww;
+		}
+
+		void normalize() {
+			double n = sqrt(x*x + y*y + z*z + w*w);
+			x /= n;
+			y /= n;
+			z /= n;
+			w /= n;
 		}
 };
 
@@ -206,6 +215,54 @@ quat slerp(quat qa, quat qb, double t) {
 	qm.y = (qa.y * ratioA + qb.y * ratioB);
 	qm.z = (qa.z * ratioA + qb.z * ratioB);
 	return qm;
+}
+
+quat rotmat2quat(Mat& rotationMatrix) {
+
+	double m00 = rotationMatrix.at<double>(0, 0);
+	double m01 = rotationMatrix.at<double>(0, 1);
+	double m02 = rotationMatrix.at<double>(0, 2);
+	double m10 = rotationMatrix.at<double>(1, 0);
+	double m11 = rotationMatrix.at<double>(1, 1);
+	double m12 = rotationMatrix.at<double>(1, 2);
+	double m20 = rotationMatrix.at<double>(2, 0);
+	double m21 = rotationMatrix.at<double>(2, 1);
+	double m22 = rotationMatrix.at<double>(2, 2);
+
+	double qx, qy, qz, qw;
+
+	float tr = m00 + m11 + m22;
+
+	if (tr > 0) {
+		float S = sqrt(tr + 1.0) * 2; // S=4*qw 
+		qw = 0.25 * S;
+		qx = (m21 - m12) / S;
+		qy = (m02 - m20) / S;
+		qz = (m10 - m01) / S;
+	}
+	else if ((m00 > m11)&(m00 > m22)) {
+		float S = sqrt(1.0 + m00 - m11 - m22) * 2; // S=4*qx 
+		qw = (m21 - m12) / S;
+		qx = 0.25 * S;
+		qy = (m01 + m10) / S;
+		qz = (m02 + m20) / S;
+	}
+	else if (m11 > m22) {
+		float S = sqrt(1.0 + m11 - m00 - m22) * 2; // S=4*qy
+		qw = (m02 - m20) / S;
+		qx = (m01 + m10) / S;
+		qy = 0.25 * S;
+		qz = (m12 + m21) / S;
+	}
+	else {
+		float S = sqrt(1.0 + m22 - m00 - m11) * 2; // S=4*qz
+		qw = (m10 - m01) / S;
+		qx = (m02 + m20) / S;
+		qy = (m12 + m21) / S;
+		qz = 0.25 * S;
+	}
+
+	return quat(qx, qy, qz, qw);
 }
 
 
@@ -448,6 +505,27 @@ Point2d calculateMedian() {
 		point += pointBuffer[i];
 	}
 	return point / bufferSize;
+}
+
+void drawEstimatedPose(vector<double>& transVec, vector<double>& rotVec, Mat& img) {
+	double length = 0.1;
+	Point3d o, x, y, z;
+	vector<Point3d> crossPoints;
+	vector<Point2d> crossImgPoints;
+	o = Point3d(0, 0, 0);
+	x = Point3d(length, 0, 0);
+	y = Point3d(0, length, 0);
+	z = Point3d(0, 0, length);
+	crossPoints.push_back(o);
+	crossPoints.push_back(x);
+	crossPoints.push_back(y);
+	crossPoints.push_back(z);
+
+	projectPoints(crossPoints, rotVec, transVec, cameraMatrix, distortCoeffs, crossImgPoints);
+
+	line(img, crossImgPoints[0], crossImgPoints[1], Scalar(0, 0, 255), 2);
+	line(img, crossImgPoints[0], crossImgPoints[2], Scalar(0, 255, 0), 2);
+	line(img, crossImgPoints[0], crossImgPoints[3], Scalar(255, 0, 0), 2);
 }
 
 void fitBandContours(Rect roi, Rect roi2)
@@ -804,6 +882,10 @@ void PnPinit() {
 }
 
 void reDetectMatch() {
+	//clear index arrays
+	for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
+		LEDtoNewBlobMatching[i] = -1;
+	}
 	//sort blobs by x coordinate descending
 	sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
 
@@ -815,12 +897,16 @@ void reDetectMatch() {
 	getBlobsByColor(newBlobPoints, imgThreshC1, imgThreshC2, blobsC1, blobsC2, 5);
 
 	if (!blobsC1.empty()) {
-		for (int i = 0; i < min((int)blobsC1.size(), 4); i++) { //left color from left to 3
-			LEDtoNewBlobMatching[4 - blobsC1.size() + i] = blobsC1[i];
+		int leftThresh = min((int)blobsC1.size(), 4); //how far left from the color border are blobs added
+
+		for (int i = 0; i < leftThresh; i++) { //left color from left to LED3
+			LEDtoNewBlobMatching[4 - leftThresh + i] = blobsC1[i + (blobsC1.size() - leftThresh)];
 		}
 	}
 	if (!blobsC2.empty()) {
-		for (int i = 0; i < min((int)blobsC2.size(), 6); i++) { //right color from 4 to right
+		int rightThresh = min((int)blobsC2.size(), 6); //how far right from the color border are blobs added
+
+		for (int i = 0; i < rightThresh; i++) { //right color from LED4 to right
 			LEDtoNewBlobMatching[4 + i] = blobsC2[i];
 		}
 	}
@@ -844,6 +930,10 @@ void PnPtest(int frame) {
 
 	if (relevantLEDs.size() >= 4) {
 		solvePnP(relevantLEDs, correspondingBlobs, cameraMatrix, distortCoeffs, rvecTest, tvecTest, false, SOLVEPNP_ITERATIVE);
+		rotVecEst = rvecTest;
+		transVecEst = tvecTest;
+		drawEstimatedPose(tvecTest, rvecTest, imgDraw);
+
 
 		//resulting rvec and tvec transform from the model coordinate system to the camera, so invert? turns out no
 		Mat rotmatTest;
@@ -887,9 +977,6 @@ void PnPtest(int frame) {
 		cout << "";
 		if (reprojectioncounter < 4) {
 			//bad pose. reinitiate detection phase
-			//relevantLEDs = get 4 random LEDs from modelPoints3D
-			//solveP3P with all possible matches in newBlobPoints
-			//reproject each one and count LED to blob matches
 			trackingLost = true;
 		}
 		else {
@@ -968,17 +1055,17 @@ vector<vector<double>> interpolateAllTruePosesAtFrameTS() {
 				//calc pose at frameTS
 				vector<double>poseAtTS;
 				poseAtTS.push_back(frameTS);
-				double relation = (frameTS - poseLeft[0]) / (poseTS - poseLeft[0]);
+				double ratio = (frameTS - poseLeft[0]) / (poseTS - poseLeft[0]);
 
 				//slerp quaternion
 				quat qa = quat(poseLeft[1], poseLeft[2], poseLeft[3], poseLeft[4]);
 				quat qb = quat(poseRight[1], poseRight[2], poseRight[3], poseRight[4]);
-				quat qm = slerp(qa, qb, relation); //<--
+				quat qm = slerp(qa, qb, ratio); //<--
 
 				//lerp position
 				Point3d pa = Point3d(poseLeft[5], poseLeft[6], poseLeft[7]);
 				Point3d pb = Point3d(poseRight[5], poseRight[6], poseRight[7]);
-				Point3d pm = relation * pb + (1 - relation) * pa; //<--
+				Point3d pm = ratio * pb + (1 - ratio) * pa; //<--
 
 				poseAtTS.push_back(qm.x);
 				poseAtTS.push_back(qm.y);
@@ -1058,9 +1145,13 @@ void drawTruePose(int frame) {
 
 	Rodrigues(rotmat, rotvec);
 
+	rotVecTrue = rotvec;
+
 	transvec.push_back(allSLERPedPoses[frame][5]);//x
 	transvec.push_back(-allSLERPedPoses[frame][6]);//y
 	transvec.push_back(-allSLERPedPoses[frame][7]);//z
+
+	transVecTrue = transvec;
 
 	projectPoints(truePoints, rotvec, transvec, cameraMatrix, distortCoeffs, trueImgPoints);
 	/*cout << "true rot: " << rotvec[0] << " " << rotvec[1] << " " << rotvec[2] << endl
@@ -1075,6 +1166,25 @@ void drawTruePose(int frame) {
 	for (Point2d p : trueImgPoints) {
 		circle(image, p, 1, Scalar(255, 0, 255), 2);
 	}
+
+	double length = 0.1;
+	Point3d o, x, y, z;
+	vector<Point3d> crossPoints;
+	vector<Point2d> crossImgPoints;
+	o = Point3d(0, 0, 0);
+	x = Point3d(length, 0, 0);
+	y = Point3d(0, length, 0);
+	z = Point3d(0, 0, length);
+	crossPoints.push_back(o);
+	crossPoints.push_back(x);
+	crossPoints.push_back(y);
+	crossPoints.push_back(z);
+
+	projectPoints(crossPoints, rotvec, transvec, cameraMatrix, distortCoeffs, crossImgPoints);
+
+	line(image, crossImgPoints[0], crossImgPoints[1], Scalar(0, 0, 255), 2);
+	line(image, crossImgPoints[0], crossImgPoints[2], Scalar(0, 255, 0), 2);
+	line(image, crossImgPoints[0], crossImgPoints[3], Scalar(255, 0, 0), 2);
 }
 
 void trackBlobsOFlow(float l1thresh) { //used to match new blobs to old blobs
@@ -1239,6 +1349,32 @@ void drawKalmanPoints() {
 	}
 }
 
+void appendPoseError(string filePath, int frame, vector<vector<double>>& errors) {
+	double quatVecDot, rotDist, transDist, transDistX, transDistY, transDistZ;
+	Mat rotMatEst, rotMatTrue;
+	Rodrigues(rotVecEst, rotMatEst);
+	Rodrigues(rotVecTrue, rotMatTrue);
+	quat rotQuatEst = rotmat2quat(rotMatEst);
+	quat rotQuatTrue = rotmat2quat(rotMatTrue);
+	//rotational distance metric:
+	rotQuatEst.normalize();
+	rotQuatTrue.normalize();
+	quatVecDot = rotQuatEst.x * rotQuatTrue.x + rotQuatEst.y * rotQuatTrue.y + rotQuatEst.z * rotQuatTrue.z + rotQuatEst.w * rotQuatTrue.w;
+	rotDist = 1 - abs(quatVecDot);
+	transDist = sqrt(pow(transVecEst[0] - transVecTrue[0],2) + pow(transVecEst[1] - transVecTrue[1], 2) + pow(transVecEst[2] - transVecTrue[2], 2));
+
+	vector<double> errorPlus;
+	errorPlus.push_back(frame);
+	errorPlus.push_back(transDist);
+	errorPlus.push_back(rotDist);
+	errors.push_back(errorPlus);
+
+	ofstream errFile;
+	errFile.open(filePath, ios_base::app);
+	errFile << frame << "," << transDist << "," << rotDist << "\n";
+	errFile.close();
+}
+
 
 int main()
 {
@@ -1369,7 +1505,7 @@ int main()
 
 		greyLEDdetect();
 		if (!trackingLost) {
-			trackBlobsOFlow(20);
+			trackBlobsOFlow(40);
 		}
 		PnPtest(frameCounter);
 
@@ -1380,7 +1516,8 @@ int main()
 
 		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		//drawTruePose(frameCounter);
+		drawTruePose(frameCounter);
+		//appendPoseError("recorder/errors.txt", frameCounter, allErrors);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
