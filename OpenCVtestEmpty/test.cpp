@@ -18,7 +18,7 @@ struct point_sorter { // less for points
 
 //ground truth
 string pathToImgSequence("video_1.003_darkblue_new/");
-int startFrame = 87; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
+int startFrame = 168; //0.006_darkblue_new: 192 || 1.003_darkblue: 168
 vector<double> allFrameTimeStamps;
 vector<vector<double>> allTruePoses;
 vector<vector<double>> allSLERPedPoses;
@@ -622,7 +622,6 @@ void fitBandBlob()
 //}
 
 void getBlobsByColor(vector<Point2f>& blobPositions, Mat& imgThreshC1, Mat& imgThreshC2, vector<int>& blobsC1, vector<int>& blobsC2, int radius) {
-	//Mat bothThresh = Mat(imgThreshC1.rows, imgThreshC1.cols, CV_8U);
 	Mat bothThresh = imgThreshC1 + imgThreshC2;
 	for (int i = 0; i < blobPositions.size(); i++) {
 		for (int j = 1; j <= radius; j++) {
@@ -890,9 +889,8 @@ void reDetectMatch() {
 	sort(newBlobPoints.begin(), newBlobPoints.end(), point_sorter());
 
 	cvtColor(image, imgHLS, COLOR_RGB2HLS); //Convert the captured frame from BGR to HLS with hue switch because of red edge case
-	//inRange(imgHLS, Scalar(0, 0, 0), Scalar(180, 255, 255), imgThreshC1);
 	inRange(imgHLS, Scalar(15, 115, 255), Scalar(35, 255, 255), imgThreshC1); //Threshold for blue in darkblue 1.003
-	inRange(imgHLS, Scalar(85, 115, 255), Scalar(180, 255, 255), imgThreshC2); //Threshold for red in darkblue 1.003
+	inRange(imgHLS, Scalar(85, 115, 255), Scalar(170, 255, 255), imgThreshC2); //Threshold for red in darkblue 1.003
 	vector<int> blobsC1, blobsC2;
 	getBlobsByColor(newBlobPoints, imgThreshC1, imgThreshC2, blobsC1, blobsC2, 5);
 
@@ -910,6 +908,9 @@ void reDetectMatch() {
 			LEDtoNewBlobMatching[4 + i] = blobsC2[i];
 		}
 	}
+
+	imshow("BlueThresh", imgThreshC1);
+	imshow("RedThresh", imgThreshC2);
 }
 
 void PnPtest(int frame) {
@@ -918,9 +919,6 @@ void PnPtest(int frame) {
 	vector<Point3d> relevantLEDs; //those 3DLEDs that have a known 2D blob position
 	vector<Point2d> correspondingBlobs;//the corresponding blob positions
 
-	if (trackingLost) {
-		reDetectMatch();
-	}
 	for (int i = 0; i < LEDtoNewBlobMatching.size(); i++) {
 		if (LEDtoNewBlobMatching[i] >= 0) { //push all 3d led points that have a match
 			relevantLEDs.push_back(modelPoints3D[i]);
@@ -963,8 +961,8 @@ void PnPtest(int frame) {
 
 		int reprojectioncounter = 0;
 		for (int i = 0; i < outputTestPoints.size(); i++) {
-			circle(imgDraw, outputTestPoints[i], 1, Scalar(0, 255, 0), 2); // green: reprojected LEDs
-			putText(imgDraw, to_string(i), outputTestPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
+			circle(imgDraw, outputTestPoints[i], 1, Scalar(255, 0, 255), 2); // green: reprojected LEDs
+			putText(imgDraw, to_string(i), outputTestPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 255));
 			//for all reprojected LEDs check if a blob is detected there
 			int index = matchPointToPoints(outputTestPoints[i], newBlobPoints, 5);
 			LEDtoOldBlobMatching[i] = index;
@@ -1088,7 +1086,7 @@ void drawTruePose(int frame) {
 	vector<Point2d> trueImgPoints;
 	Point3d p = Point3d(0, 0, 0);
 	truePoints = modelPoints3D;
-	truePoints.push_back(p);
+	//truePoints.push_back(p);
 
 	vector<double> rotvec, transvec;
 	double qx = allSLERPedPoses[frame][1];
@@ -1163,8 +1161,9 @@ void drawTruePose(int frame) {
 
 	//cout << "true rotEul: " << "heading=" << heading << " bank=" << bank << " attitude=" << attitude << endl;
 
-	for (Point2d p : trueImgPoints) {
-		circle(image, p, 1, Scalar(255, 0, 255), 2);
+	for (int i = 0; i < trueImgPoints.size(); i++) {
+		circle(image, trueImgPoints[i], 1, Scalar(255, 0, 255), 2);
+		putText(image, to_string(i), trueImgPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 255));
 	}
 
 	double length = 0.1;
@@ -1223,18 +1222,18 @@ void trackBlobsOFlow(float l1thresh) { //used to match new blobs to old blobs
 		oldToNewBlobMatching = vector<int>(oldBlobPoints.size());
 		for (int i = 0; i < oldBlobPoints.size(); i++) {
 			//circle(image, oldBlobPoints[i], 2, Scalar(255, 0, 0), 2);// blue: old blobs
-			putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
+			//putText(image, to_string(i), oldBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(255, 0, 0),1,8,true);
 		}
 		for (int i = 0; i < predictedBlobPoints.size(); i++) {
-			circle(image, predictedBlobPoints[i], 4, Scalar(0, 255, 0), 2);//predicted blobs
-			line(image, oldBlobPoints[i], predictedBlobPoints[i], Scalar(0, 255, 0), 2);
+			circle(imgDraw, predictedBlobPoints[i], 4, Scalar(0, 255, 0), 1);//predicted blobs
+			line(imgDraw, oldBlobPoints[i], predictedBlobPoints[i], Scalar(0, 255, 0), 2);
 			if (err[i] > l1thresh) {
 				oldToNewBlobMatching[i] = -1;
 			}
 			else {
 				oldToNewBlobMatching[i] = matchPointToPoints(predictedBlobPoints[i], newBlobPoints, 10);
 			}
-			putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
+			//putText(image, to_string(oldToNewBlobMatching[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 			//putText(image, to_string((int)err[i]), predictedBlobPoints[i], FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 255));
 		}
 		imshow("Original", image);
@@ -1465,7 +1464,7 @@ int main()
 	initKalmanFilter(KF, nStates, nMeasurements, nInputs, dt);    // init function
 	measurements = Mat(nMeasurements, 1, CV_64FC1); measurements.setTo(Scalar(0));
 
-	paused = false;
+	paused = true;
 	recordMode = false;
 	bool frameRead = cap.read(frame); // read a new frame from video (frame if resize, image if not)
 
@@ -1492,6 +1491,7 @@ int main()
 		imshow("Original", image);
 		waitKey(1);
 
+
 		//detectHLSthresholds(); //show regions of specified HLS values
 		//detectHSVthresholds();
 		//detectYCrCbthresholds();
@@ -1499,6 +1499,8 @@ int main()
 		//trackCamshift();
 		//LEDdetect();
 		//fitBandBlob();
+
+
 		if (!backproj.empty() && !backproj2.empty()) {
 			//fitBandContours(cutRectToImgBounds(trackBox.boundingRect(), imgResizeX, imgResizeY), cutRectToImgBounds(trackBox2.boundingRect(), imgResizeX, imgResizeY));
 		}
@@ -1507,23 +1509,32 @@ int main()
 		if (!trackingLost) {
 			trackBlobsOFlow(40);
 		}
+		else {
+			reDetectMatch();
+		}
+
 		PnPtest(frameCounter);
 
 		if (!trackingLost) {
-			updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
-			drawKalmanPoints();
+			//updateKalmanFilter(KF, measurements, translation_estimated, rotation_estimated);
+			//drawKalmanPoints();
 		}
 
 		////solvePnP(modelPoints3D, imagePoints2D, cameraMatrix, distortCoeffs, rotVec, transVec, false, iterationCount, reprojectionError, minInliers, inliersA, SOLVEPNP_IPPE);
 		
-		drawTruePose(frameCounter);
+		
 		//appendPoseError("recorder/errors.txt", frameCounter, allErrors);
 
 		//update previous frame and points for optical flow
 		imgGreyOld = imgGrey.clone();
 		imgBinaryOld = imgBinary.clone();
 		oldBlobPoints = newBlobPoints;
+
+		//drawTruePose(frameCounter);
 		
+		//putText(imgDraw, to_string(frameCounter), Point2i(2, 30), FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
+		//putText(image, to_string(frameCounter), Point2i(2, 30), FONT_HERSHEY_SCRIPT_SIMPLEX, 1, Scalar(0, 255, 0));
+
 		//imshow("imgGrey", imgGrey);
 		imshow("Original", image); //show the original image
 		namedWindow("Draw", 1);
@@ -1545,10 +1556,10 @@ int main()
 			//imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
 		}
 
-		if (waitKey(0) == 32) //frame by frame with 'space'
-		{
-			cout << "space key is pressed by user" << endl;
-		}
+		//if (waitKey(0) == 32) //frame by frame with 'space'
+		//{
+		//	cout << "space key is pressed by user" << endl;
+		//}
 
 		char c = (char)waitKey(10);
 		switch (c)
@@ -1587,6 +1598,8 @@ int main()
 			//imwrite("recorder/backproj2" + to_string(frameCounter) + ".png", backprojImage2);
 			//imwrite("recorder/HLSthresholded" + to_string(frameCounter) + ".png", imgThresholded);
 			//imwrite("recorder/optflow" + to_string(frameCounter) + ".png", bgr);
+			imwrite("recorder/blueBin" + to_string(frameCounter) + ".png", imgThreshC1);
+			imwrite("recorder/redBin" + to_string(frameCounter) + ".png", imgThreshC2);
 			break;
 		default:
 			;//cout << c;
